@@ -49,7 +49,8 @@ func (api *API) Routes() http.Handler {
 // has changed since the last reload, triggering a differential
 // reload if so, then returns the cached MCP tool definitions.
 // The ?refresh=true query parameter forces a tool re-scan
-// independent of config changes.
+// independent of config changes. Failed servers are retried
+// on each request and their status is included in the response.
 func (api *API) handleListTools(rw http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -73,6 +74,12 @@ func (api *API) handleListTools(rw http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Retry any previously failed servers. This is cheap when
+	// there are no failures or the retry interval hasn't elapsed.
+	if err := api.manager.RetryFailed(ctx); err != nil {
+		api.logger.Warn(ctx, "failed to retry MCP servers", slog.Error(err))
+	}
+
 	// Allow callers to force a tool re-scan before listing.
 	// Skip if a config reload ran above, since it already
 	// refreshes tools as part of the reload.
@@ -88,8 +95,13 @@ func (api *API) handleListTools(rw http.ResponseWriter, r *http.Request) {
 		tools = []workspacesdk.MCPToolInfo{}
 	}
 
+	// Include failed servers so callers know which servers are
+	// unavailable and why.
+	failedServers := api.manager.FailedServers()
+
 	httpapi.Write(ctx, rw, http.StatusOK, workspacesdk.ListMCPToolsResponse{
-		Tools: tools,
+		Tools:         tools,
+		FailedServers: failedServers,
 	})
 }
 

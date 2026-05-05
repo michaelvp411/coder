@@ -1109,7 +1109,8 @@ type FileEditResult struct {
 // ListMCPToolsResponse is the response from the agent's
 // MCP tool discovery endpoint.
 type ListMCPToolsResponse struct {
-	Tools []MCPToolInfo `json:"tools"`
+	Tools         []MCPToolInfo      `json:"tools"`
+	FailedServers []MCPServerFailure `json:"failed_servers,omitempty"`
 }
 
 // MCPToolInfo describes a single tool discovered from an MCP
@@ -1125,6 +1126,16 @@ type MCPToolInfo struct {
 	Schema map[string]any `json:"schema"`
 	// Required lists required parameter names.
 	Required []string `json:"required"`
+}
+
+// MCPServerFailure describes an MCP server that failed to connect.
+type MCPServerFailure struct {
+	// Name is the server name/key from the config.
+	Name string `json:"name"`
+	// Error is the human-readable error message from the last connection attempt.
+	Error string `json:"error"`
+	// LastAttempt is when the last connection attempt was made.
+	LastAttempt time.Time `json:"last_attempt"`
 }
 
 // ContextConfigResponse is the response from the agent's context
