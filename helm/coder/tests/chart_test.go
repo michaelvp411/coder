@@ -133,6 +133,30 @@ var testCases = []testCase{
 		name:          "namespace_rbac",
 		expectedError: "",
 	},
+	{
+		name:          "priority_class_name",
+		expectedError: "",
+	},
+	{
+		name:          "probes_custom",
+		expectedError: "",
+	},
+	{
+		name:          "probes_disabled",
+		expectedError: "",
+	},
+	{
+		name:          "pprof_address_override",
+		expectedError: "",
+	},
+	{
+		name:          "prometheus_address_override",
+		expectedError: "",
+	},
+	{
+		name:          "host_aliases",
+		expectedError: "",
+	},
 }
 
 type testCase struct {

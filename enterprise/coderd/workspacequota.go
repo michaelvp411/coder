@@ -9,8 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"cdr.dev/slog"
-
+	"cdr.dev/slog/v3"
 	"github.com/coder/coder/v2/coderd/database"
 	"github.com/coder/coder/v2/coderd/httpapi"
 	"github.com/coder/coder/v2/coderd/httpmw"
@@ -128,7 +127,7 @@ func (c *committer) CommitQuota(
 // @Tags Enterprise
 // @Param user path string true "User ID, name, or me"
 // @Success 200 {object} codersdk.WorkspaceQuota
-// @Router /workspace-quota/{user} [get]
+// @Router /api/v2/workspace-quota/{user} [get]
 // @Deprecated this endpoint will be removed, use /organizations/{organization}/members/{user}/workspace-quota instead
 func (api *API) workspaceQuotaByUser(rw http.ResponseWriter, r *http.Request) {
 	defaultOrg, err := api.Database.GetDefaultOrganization(r.Context())
@@ -151,7 +150,7 @@ func (api *API) workspaceQuotaByUser(rw http.ResponseWriter, r *http.Request) {
 // @Param user path string true "User ID, name, or me"
 // @Param organization path string true "Organization ID" format(uuid)
 // @Success 200 {object} codersdk.WorkspaceQuota
-// @Router /organizations/{organization}/members/{user}/workspace-quota [get]
+// @Router /api/v2/organizations/{organization}/members/{user}/workspace-quota [get]
 func (api *API) workspaceQuota(rw http.ResponseWriter, r *http.Request) {
 	var (
 		organization = httpmw.OrganizationParam(r)

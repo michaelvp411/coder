@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/coder/coder/v2/coderd/database"
 	"github.com/coder/coder/v2/coderd/database/dbgen"
@@ -14,9 +16,6 @@ import (
 	"github.com/coder/coder/v2/coderd/util/ptr"
 	"github.com/coder/coder/v2/coderd/workspacestats"
 	"github.com/coder/coder/v2/testutil"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func Test_ActivityBumpWorkspace(t *testing.T) {
@@ -25,11 +24,11 @@ func Test_ActivityBumpWorkspace(t *testing.T) {
 	// We test the below in multiple timezones specifically
 	// chosen to trigger timezone-related bugs.
 	timezones := []string{
-		"Asia/Kolkata",        // No DST, positive fractional offset
-		"Canada/Newfoundland", // DST, negative fractional offset
-		"Europe/Paris",        // DST, positive offset
-		"US/Arizona",          // No DST, negative offset
-		"UTC",                 // Baseline
+		"Asia/Kolkata",     // No DST, positive fractional offset
+		"America/St_Johns", // DST, negative fractional offset
+		"Europe/Paris",     // DST, positive offset
+		"US/Arizona",       // No DST, negative offset
+		"UTC",              // Baseline
 	}
 
 	for _, tt := range []struct {
@@ -269,13 +268,14 @@ func Test_ActivityBumpWorkspace(t *testing.T) {
 
 				// Bump duration is measured from the time of the bump, so we measure from here.
 				start := dbtime.Now()
-				workspacestats.ActivityBumpWorkspace(ctx, log, db, bld.WorkspaceID, nextAutostart(start))
+				workspacestats.ActivityBumpWorkspace(ctx, log, db, bld.WorkspaceID, nextAutostart(start), workspacestats.ActivityBumpReasonWorkspaceStats)
 				end := dbtime.Now()
 
 				// Validate our state after bump
 				updatedBuild, err := db.GetLatestWorkspaceBuildByWorkspaceID(ctx, bld.WorkspaceID)
 				require.NoError(t, err, "unexpected error getting latest workspace build")
 				require.Equal(t, bld.MaxDeadline.UTC(), updatedBuild.MaxDeadline.UTC(), "max_deadline should not have changed")
+
 				if tt.expectedBump == 0 {
 					assert.Equal(t, bld.UpdatedAt.UTC(), updatedBuild.UpdatedAt.UTC(), "should not have bumped updated_at")
 					assert.Equal(t, bld.Deadline.UTC(), updatedBuild.Deadline.UTC(), "should not have bumped deadline")

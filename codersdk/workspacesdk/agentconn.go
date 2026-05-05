@@ -5,12 +5,15 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/netip"
+	neturl "net/url"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,8 +24,7 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/speedtest"
 
-	"cdr.dev/slog"
-
+	"cdr.dev/slog/v3"
 	"github.com/coder/coder/v2/coderd/tracing"
 	"github.com/coder/coder/v2/codersdk"
 	"github.com/coder/coder/v2/codersdk/healthsdk"
@@ -42,46 +44,114 @@ func NewAgentConn(conn *tailnet.Conn, opts AgentConnOptions) AgentConn {
 	}
 }
 
+// WrapAgentConn returns an AgentConn that delegates every operation to conn and
+// applies closeFunc exactly once when the logical session is closed.
+//
+// If conn is nil, any provided closeFunc is invoked immediately so logical
+// session cleanup is not silently dropped.
+func WrapAgentConn(conn AgentConn, closeFunc func() error) AgentConn {
+	if conn == nil {
+		if closeFunc != nil {
+			_ = closeFunc()
+		}
+		return nil
+	}
+	if closeFunc == nil {
+		closeFunc = func() error { return nil }
+	}
+	return &wrappedAgentConn{AgentConn: conn, closeFunc: closeFunc}
+}
+
+type wrappedAgentConn struct {
+	AgentConn
+	closeFunc func() error
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func (c *wrappedAgentConn) Close() error {
+	c.closeOnce.Do(func() {
+		// Close the underlying connection before releasing the logical session so
+		// the lease remains held until teardown is complete.
+		c.closeErr = errors.Join(c.AgentConn.Close(), c.closeFunc())
+	})
+	return c.closeErr
+}
+
+const (
+	// CoderChatIDHeader is the HTTP header containing the current
+	// chat ID. Set by coderd on agentconn requests originating
+	// from chatd.
+	CoderChatIDHeader = "Coder-Chat-Id"
+	// CoderAncestorChatIDsHeader is the HTTP header containing a
+	// JSON array of ancestor chat UUIDs.
+	CoderAncestorChatIDsHeader = "Coder-Ancestor-Chat-Ids"
+)
+
 // AgentConn represents a connection to a workspace agent.
 // @typescript-ignore AgentConn
 type AgentConn interface {
 	TailnetConn() *tailnet.Conn
+	SetExtraHeaders(h http.Header)
 
 	AwaitReachable(ctx context.Context) bool
+	CallMCPTool(ctx context.Context, req CallMCPToolRequest) (CallMCPToolResponse, error)
 	Close() error
+	ContextConfig(ctx context.Context) (ContextConfigResponse, error)
 	DebugLogs(ctx context.Context) ([]byte, error)
 	DebugMagicsock(ctx context.Context) ([]byte, error)
 	DebugManifest(ctx context.Context) ([]byte, error)
 	DialContext(ctx context.Context, network string, addr string) (net.Conn, error)
 	GetPeerDiagnostics() tailnet.PeerDiagnostics
 	ListContainers(ctx context.Context) (codersdk.WorkspaceAgentListContainersResponse, error)
+	ListMCPTools(ctx context.Context) (ListMCPToolsResponse, error)
+	ListProcesses(ctx context.Context) (ListProcessesResponse, error)
 	ListeningPorts(ctx context.Context) (codersdk.WorkspaceAgentListeningPortsResponse, error)
 	Netcheck(ctx context.Context) (healthsdk.AgentNetcheckReport, error)
 	Ping(ctx context.Context) (time.Duration, bool, *ipnstate.PingResult, error)
+	ProcessOutput(ctx context.Context, id string, opts *ProcessOutputOptions) (ProcessOutputResponse, error)
 	PrometheusMetrics(ctx context.Context) ([]byte, error)
 	ReconnectingPTY(ctx context.Context, id uuid.UUID, height uint16, width uint16, command string, initOpts ...AgentReconnectingPTYInitOption) (net.Conn, error)
+	DeleteDevcontainer(ctx context.Context, devcontainerID string) error
 	RecreateDevcontainer(ctx context.Context, devcontainerID string) (codersdk.Response, error)
+	SignalProcess(ctx context.Context, id string, signal string) error
+	StartProcess(ctx context.Context, req StartProcessRequest) (StartProcessResponse, error)
 	LS(ctx context.Context, path string, req LSRequest) (LSResponse, error)
+	ResolvePath(ctx context.Context, path string) (string, error)
 	ReadFile(ctx context.Context, path string, offset, limit int64) (io.ReadCloser, string, error)
+	ReadFileLines(ctx context.Context, path string, offset, limit int64, limits ReadFileLinesLimits) (ReadFileLinesResponse, error)
 	WriteFile(ctx context.Context, path string, reader io.Reader) error
-	EditFiles(ctx context.Context, edits FileEditRequest) error
+	EditFiles(ctx context.Context, edits FileEditRequest) (FileEditResponse, error)
 	SSH(ctx context.Context) (*gonet.TCPConn, error)
 	SSHClient(ctx context.Context) (*ssh.Client, error)
 	SSHClientOnPort(ctx context.Context, port uint16) (*ssh.Client, error)
 	SSHOnPort(ctx context.Context, port uint16) (*gonet.TCPConn, error)
 	Speedtest(ctx context.Context, direction speedtest.Direction, duration time.Duration) ([]speedtest.Result, error)
 	WatchContainers(ctx context.Context, logger slog.Logger) (<-chan codersdk.WorkspaceAgentListContainersResponse, io.Closer, error)
+	WatchGit(ctx context.Context, logger slog.Logger, chatID uuid.UUID) (*wsjson.Stream[codersdk.WorkspaceAgentGitServerMessage, codersdk.WorkspaceAgentGitClientMessage], error)
+	ConnectDesktopVNC(ctx context.Context) (net.Conn, error)
+	ExecuteDesktopAction(ctx context.Context, action DesktopAction) (DesktopActionResponse, error)
+	StartDesktopRecording(ctx context.Context, req StartDesktopRecordingRequest) error
+	StopDesktopRecording(ctx context.Context, req StopDesktopRecordingRequest) (StopDesktopRecordingResponse, error)
 }
 
 // AgentConn represents a connection to a workspace agent.
 // @typescript-ignore AgentConn
 type agentConn struct {
 	*tailnet.Conn
-	opts AgentConnOptions
+	opts         AgentConnOptions
+	headersMu    sync.RWMutex
+	extraHeaders http.Header
 }
 
 func (c *agentConn) TailnetConn() *tailnet.Conn {
 	return c.Conn
+}
+
+func (c *agentConn) SetExtraHeaders(h http.Header) {
+	c.headersMu.Lock()
+	c.extraHeaders = h
+	c.headersMu.Unlock()
 }
 
 // @typescript-ignore AgentConnOptions
@@ -461,6 +531,246 @@ func (c *agentConn) WatchContainers(ctx context.Context, logger slog.Logger) (<-
 	return d.Chan(), d, nil
 }
 
+// WatchGit opens a bidirectional WebSocket to the agent's git watch
+// endpoint and returns a stream for sending subscribe/refresh messages
+// and receiving change notifications.
+func (c *agentConn) WatchGit(ctx context.Context, logger slog.Logger, chatID uuid.UUID) (*wsjson.Stream[codersdk.WorkspaceAgentGitServerMessage, codersdk.WorkspaceAgentGitClientMessage], error) {
+	ctx, span := tracing.StartSpan(ctx)
+	defer span.End()
+
+	host := net.JoinHostPort(c.agentAddress().String(), strconv.Itoa(AgentHTTPAPIServerPort))
+
+	dialOpts := &websocket.DialOptions{
+		HTTPClient:      c.apiClient(),
+		CompressionMode: websocket.CompressionNoContextTakeover,
+	}
+	c.headersMu.RLock()
+	if len(c.extraHeaders) > 0 {
+		dialOpts.HTTPHeader = c.extraHeaders.Clone()
+	}
+	c.headersMu.RUnlock()
+
+	url := fmt.Sprintf("http://%s%s", host, "/api/v0/git/watch")
+	if chatID != uuid.Nil {
+		url += "?chat_id=" + chatID.String()
+	}
+
+	conn, res, err := websocket.Dial(ctx, url, dialOpts)
+	if err != nil {
+		if res == nil {
+			return nil, err
+		}
+		return nil, codersdk.ReadBodyAsError(res)
+	}
+	if res != nil && res.Body != nil {
+		defer res.Body.Close()
+	}
+
+	conn.SetReadLimit(1 << 22) // 4MiB
+
+	return wsjson.NewStream[
+		codersdk.WorkspaceAgentGitServerMessage,
+		codersdk.WorkspaceAgentGitClientMessage,
+	](conn, websocket.MessageText, websocket.MessageText, logger), nil
+}
+
+// ConnectDesktopVNC opens a WebSocket to the agent's desktop endpoint and
+// returns a net.Conn carrying raw RFB (VNC) binary data.
+func (c *agentConn) ConnectDesktopVNC(ctx context.Context) (net.Conn, error) {
+	ctx, span := tracing.StartSpan(ctx)
+	defer span.End()
+
+	host := net.JoinHostPort(c.agentAddress().String(), strconv.Itoa(AgentHTTPAPIServerPort))
+
+	dialOpts := &websocket.DialOptions{
+		HTTPClient:      c.apiClient(),
+		CompressionMode: websocket.CompressionDisabled,
+	}
+	c.headersMu.RLock()
+	if len(c.extraHeaders) > 0 {
+		dialOpts.HTTPHeader = c.extraHeaders.Clone()
+	}
+	c.headersMu.RUnlock()
+
+	url := fmt.Sprintf("http://%s/api/v0/desktop/vnc", host)
+	conn, res, err := websocket.Dial(ctx, url, dialOpts)
+	if err != nil {
+		if res == nil {
+			return nil, err
+		}
+		return nil, codersdk.ReadBodyAsError(res)
+	}
+	if res != nil && res.Body != nil {
+		defer res.Body.Close()
+	}
+
+	// No read limit — RFB framebuffer updates can be large.
+	conn.SetReadLimit(-1)
+
+	return websocket.NetConn(ctx, conn, websocket.MessageBinary), nil
+}
+
+// DesktopAction is the request body for the desktop action
+// endpoint.
+type DesktopAction struct {
+	Action          string  `json:"action"`
+	Coordinate      *[2]int `json:"coordinate,omitempty"`
+	StartCoordinate *[2]int `json:"start_coordinate,omitempty"`
+	Text            *string `json:"text,omitempty"`
+	Duration        *int    `json:"duration,omitempty"`
+	ScrollAmount    *int    `json:"scroll_amount,omitempty"`
+	ScrollDirection *string `json:"scroll_direction,omitempty"`
+	// ScaledWidth and ScaledHeight carry the declared model-facing desktop
+	// geometry used for screenshot sizing and coordinate mapping.
+	ScaledWidth  *int `json:"scaled_width,omitempty"`
+	ScaledHeight *int `json:"scaled_height,omitempty"`
+}
+
+// DesktopActionResponse is the response from the desktop action
+// endpoint.
+type DesktopActionResponse struct {
+	Output           string `json:"output,omitempty"`
+	ScreenshotData   string `json:"screenshot_data,omitempty"`
+	ScreenshotWidth  int    `json:"screenshot_width,omitempty"`
+	ScreenshotHeight int    `json:"screenshot_height,omitempty"`
+}
+
+// StartDesktopRecordingRequest is the request body for starting a
+// desktop recording session.
+type StartDesktopRecordingRequest struct {
+	RecordingID string `json:"recording_id"`
+}
+
+// StopDesktopRecordingRequest is the request body for stopping a
+// desktop recording session.
+type StopDesktopRecordingRequest struct {
+	RecordingID string `json:"recording_id"`
+}
+
+// StopDesktopRecordingResponse wraps the response from stopping a
+// desktop recording. Body contains the recording data as a
+// multipart/mixed stream. ContentType holds the Content-Type
+// header (including boundary) so callers can parse the body.
+type StopDesktopRecordingResponse struct {
+	Body        io.ReadCloser
+	ContentType string
+}
+
+// MaxRecordingSize is the largest desktop recording (in bytes)
+// that will be accepted. Used by both the agent-side stop handler
+// and the server-side storage pipeline.
+const MaxRecordingSize = 100 << 20 // 100 MB
+
+// MaxThumbnailSize is the largest thumbnail (in bytes) that will
+// be accepted. Applied both agent-side (before streaming) and
+// server-side (when parsing multipart parts).
+const MaxThumbnailSize = 10 << 20 // 10 MB
+
+// ExecuteDesktopAction executes a mouse/keyboard/scroll action on the
+// agent's desktop.
+func (c *agentConn) ExecuteDesktopAction(ctx context.Context, action DesktopAction) (DesktopActionResponse, error) {
+	ctx, span := tracing.StartSpan(ctx)
+	defer span.End()
+
+	host := net.JoinHostPort(
+		c.agentAddress().String(),
+		strconv.Itoa(AgentHTTPAPIServerPort),
+	)
+
+	body, err := json.Marshal(action)
+	if err != nil {
+		return DesktopActionResponse{}, xerrors.Errorf("marshal action: %w", err)
+	}
+
+	url := fmt.Sprintf("http://%s/api/v0/desktop/action", host)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return DesktopActionResponse{}, xerrors.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	c.headersMu.RLock()
+	if len(c.extraHeaders) > 0 {
+		for k, v := range c.extraHeaders {
+			req.Header[k] = v
+		}
+	}
+	c.headersMu.RUnlock()
+
+	resp, err := c.apiClient().Do(req)
+	if err != nil {
+		return DesktopActionResponse{}, xerrors.Errorf("action request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return DesktopActionResponse{}, codersdk.ReadBodyAsError(resp)
+	}
+
+	var result DesktopActionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return DesktopActionResponse{}, xerrors.Errorf("decode action response: %w", err)
+	}
+	return result, nil
+}
+
+// StartDesktopRecording starts a desktop recording session on the
+// agent with the given recording ID. The recording ID is
+// caller-provided and must be unique. Idempotent — if the ID is
+// already recording, returns success.
+func (c *agentConn) StartDesktopRecording(ctx context.Context, req StartDesktopRecordingRequest) error {
+	ctx, span := tracing.StartSpan(ctx)
+	defer span.End()
+	res, err := c.apiRequest(ctx, http.MethodPost, "/api/v0/desktop/recording/start", req)
+	if err != nil {
+		return xerrors.Errorf("start recording request: %w", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return codersdk.ReadBodyAsError(res)
+	}
+	return nil
+}
+
+// StopDesktopRecording stops a desktop recording session on the
+// agent and returns the recording as a StopDesktopRecordingResponse.
+// The response body is a multipart/mixed stream containing the
+// video (and optionally a JPEG thumbnail). The caller is
+// responsible for closing the returned Body. Idempotent — safe
+// to call on an already-stopped recording.
+func (c *agentConn) StopDesktopRecording(ctx context.Context, req StopDesktopRecordingRequest) (StopDesktopRecordingResponse, error) {
+	ctx, span := tracing.StartSpan(ctx)
+	defer span.End()
+	res, err := c.apiRequest(ctx, http.MethodPost, "/api/v0/desktop/recording/stop", req)
+	if err != nil {
+		return StopDesktopRecordingResponse{}, xerrors.Errorf("stop recording request: %w", err)
+	}
+	if res.StatusCode != http.StatusOK {
+		defer res.Body.Close()
+		return StopDesktopRecordingResponse{}, codersdk.ReadBodyAsError(res)
+	}
+	// Caller is responsible for closing res.Body.
+	return StopDesktopRecordingResponse{
+		Body:        res.Body,
+		ContentType: res.Header.Get("Content-Type"),
+	}, nil
+}
+
+// DeleteDevcontainer deletes the provided devcontainer.
+// This is a blocking call and will wait for the container to be deleted.
+func (c *agentConn) DeleteDevcontainer(ctx context.Context, devcontainerID string) error {
+	ctx, span := tracing.StartSpan(ctx)
+	defer span.End()
+	res, err := c.apiRequest(ctx, http.MethodDelete, "/api/v0/containers/devcontainers/"+devcontainerID, nil)
+	if err != nil {
+		return xerrors.Errorf("do request: %w", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusNoContent {
+		return codersdk.ReadBodyAsError(res)
+	}
+	return nil
+}
+
 // RecreateDevcontainer recreates a devcontainer with the given container.
 // This is a blocking call and will wait for the container to be recreated.
 func (c *agentConn) RecreateDevcontainer(ctx context.Context, devcontainerID string) (codersdk.Response, error) {
@@ -479,6 +789,69 @@ func (c *agentConn) RecreateDevcontainer(ctx context.Context, devcontainerID str
 		return codersdk.Response{}, xerrors.Errorf("decode response body: %w", err)
 	}
 	return m, nil
+}
+
+// StartProcessRequest is the request body for starting a
+// process on the workspace agent.
+type StartProcessRequest struct {
+	Command    string            `json:"command"`
+	WorkDir    string            `json:"workdir,omitempty"`
+	Env        map[string]string `json:"env,omitempty"`
+	Background bool              `json:"background,omitempty"`
+}
+
+// StartProcessResponse is returned when a process is started.
+type StartProcessResponse struct {
+	ID      string `json:"id"`
+	Started bool   `json:"started"`
+}
+
+// ListProcessesResponse contains information about tracked
+// processes on the workspace agent.
+type ListProcessesResponse struct {
+	Processes []ProcessInfo `json:"processes"`
+}
+
+// ProcessInfo describes a tracked process on the agent.
+type ProcessInfo struct {
+	ID         string `json:"id"`
+	Command    string `json:"command"`
+	WorkDir    string `json:"workdir,omitempty"`
+	Background bool   `json:"background"`
+	Running    bool   `json:"running"`
+	ExitCode   *int   `json:"exit_code,omitempty"`
+	StartedAt  int64  `json:"started_at_unix"`
+	ExitedAt   *int64 `json:"exited_at_unix,omitempty"`
+}
+
+// ProcessOutputResponse contains the output of a process.
+type ProcessOutputResponse struct {
+	Output    string             `json:"output"`
+	Truncated *ProcessTruncation `json:"truncated,omitempty"`
+	Running   bool               `json:"running"`
+	ExitCode  *int               `json:"exit_code,omitempty"`
+}
+
+// ProcessOutputOptions configures blocking behavior for
+// process output retrieval.
+type ProcessOutputOptions struct {
+	// Wait enables blocking mode. When true, the request
+	// blocks until the process exits or the context expires.
+	Wait bool
+}
+
+// ProcessTruncation describes how process output was truncated.
+type ProcessTruncation struct {
+	OriginalBytes int    `json:"original_bytes"`
+	RetainedBytes int    `json:"retained_bytes"`
+	OmittedBytes  int    `json:"omitted_bytes"`
+	Strategy      string `json:"strategy"`
+}
+
+// SignalProcessRequest is the request body for signaling a
+// process on the workspace agent.
+type SignalProcessRequest struct {
+	Signal string `json:"signal"`
 }
 
 type LSRequest struct {
@@ -519,7 +892,9 @@ func (c *agentConn) LS(ctx context.Context, path string, req LSRequest) (LSRespo
 	ctx, span := tracing.StartSpan(ctx)
 	defer span.End()
 
-	res, err := c.apiRequest(ctx, http.MethodPost, fmt.Sprintf("/api/v0/list-directory?path=%s", path), req)
+	res, err := c.apiRequest(ctx, http.MethodPost, agentAPIPath("/api/v0/list-directory", neturl.Values{
+		"path": []string{path},
+	}), req)
 	if err != nil {
 		return LSResponse{}, xerrors.Errorf("do request: %w", err)
 	}
@@ -535,6 +910,65 @@ func (c *agentConn) LS(ctx context.Context, path string, req LSRequest) (LSRespo
 	return m, nil
 }
 
+// ResolvePathResponse is the response from the agent's path-resolution endpoint.
+type ResolvePathResponse struct {
+	ResolvedPath string `json:"resolved_path"`
+}
+
+// ResolvePath resolves the existing portion of an absolute path through any
+// symlinks and preserves missing trailing components.
+func (c *agentConn) ResolvePath(ctx context.Context, path string) (string, error) {
+	ctx, span := tracing.StartSpan(ctx)
+	defer span.End()
+
+	res, err := c.apiRequest(ctx, http.MethodGet, agentAPIPath("/api/v0/resolve-path", neturl.Values{
+		"path": []string{path},
+	}), nil)
+	if err != nil {
+		return "", xerrors.Errorf("do request: %w", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return "", codersdk.ReadBodyAsError(res)
+	}
+
+	var m ResolvePathResponse
+	if err := json.NewDecoder(res.Body).Decode(&m); err != nil {
+		return "", xerrors.Errorf("decode response body: %w", err)
+	}
+	return m.ResolvedPath, nil
+}
+
+// ReadFileLines reads a file with line-based offset and limit, returning
+// line-numbered content with safety limits.
+func (c *agentConn) ReadFileLines(ctx context.Context, path string, offset, limit int64, limits ReadFileLinesLimits) (ReadFileLinesResponse, error) {
+	ctx, span := tracing.StartSpan(ctx)
+	defer span.End()
+
+	res, err := c.apiRequest(ctx, http.MethodGet, agentAPIPath("/api/v0/read-file-lines", neturl.Values{
+		"path":               []string{path},
+		"offset":             []string{strconv.FormatInt(offset, 10)},
+		"limit":              []string{strconv.FormatInt(limit, 10)},
+		"max_file_size":      []string{strconv.FormatInt(limits.MaxFileSize, 10)},
+		"max_line_bytes":     []string{strconv.Itoa(limits.MaxLineBytes)},
+		"max_response_lines": []string{strconv.Itoa(limits.MaxResponseLines)},
+		"max_response_bytes": []string{strconv.Itoa(limits.MaxResponseBytes)},
+	}), nil)
+	if err != nil {
+		return ReadFileLinesResponse{}, xerrors.Errorf("do request: %w", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return ReadFileLinesResponse{}, codersdk.ReadBodyAsError(res)
+	}
+
+	var resp ReadFileLinesResponse
+	if err := json.NewDecoder(res.Body).Decode(&resp); err != nil {
+		return ReadFileLinesResponse{}, xerrors.Errorf("decode response: %w", err)
+	}
+	return resp, nil
+}
+
 // ReadFile reads from a file from the workspace, returning a file reader and
 // the mime type.
 func (c *agentConn) ReadFile(ctx context.Context, path string, offset, limit int64) (io.ReadCloser, string, error) {
@@ -542,7 +976,11 @@ func (c *agentConn) ReadFile(ctx context.Context, path string, offset, limit int
 	defer span.End()
 
 	//nolint:bodyclose // we want to return the body so the caller can stream.
-	res, err := c.apiRequest(ctx, http.MethodGet, fmt.Sprintf("/api/v0/read-file?path=%s&offset=%d&limit=%d", path, offset, limit), nil)
+	res, err := c.apiRequest(ctx, http.MethodGet, agentAPIPath("/api/v0/read-file", neturl.Values{
+		"path":   []string{path},
+		"offset": []string{strconv.FormatInt(offset, 10)},
+		"limit":  []string{strconv.FormatInt(limit, 10)},
+	}), nil)
 	if err != nil {
 		return nil, "", xerrors.Errorf("do request: %w", err)
 	}
@@ -564,7 +1002,9 @@ func (c *agentConn) WriteFile(ctx context.Context, path string, reader io.Reader
 	ctx, span := tracing.StartSpan(ctx)
 	defer span.End()
 
-	res, err := c.apiRequest(ctx, http.MethodPost, fmt.Sprintf("/api/v0/write-file?path=%s", path), reader)
+	res, err := c.apiRequest(ctx, http.MethodPost, agentAPIPath("/api/v0/write-file", neturl.Values{
+		"path": []string{path},
+	}), reader)
 	if err != nil {
 		return xerrors.Errorf("do request: %w", err)
 	}
@@ -580,9 +1020,55 @@ func (c *agentConn) WriteFile(ctx context.Context, path string, reader io.Reader
 	return nil
 }
 
+// ReadFileLinesResponse is the response from the line-based file reader.
+type ReadFileLinesResponse struct {
+	Success    bool   `json:"success"`
+	FileSize   int64  `json:"file_size,omitempty"`
+	TotalLines int    `json:"total_lines,omitempty"`
+	LinesRead  int    `json:"lines_read,omitempty"`
+	Content    string `json:"content,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
+// ReadFileLinesLimits contains configurable safety limits for the line-based
+// file reader. These are sent as query parameters so callers can tune them
+// without requiring an agent redeployment.
+type ReadFileLinesLimits struct {
+	// MaxFileSize is the maximum file size (in bytes) that will be opened.
+	MaxFileSize int64
+	// MaxLineBytes is the per-line byte cap before truncation.
+	MaxLineBytes int
+	// MaxResponseLines is the maximum number of lines in a single response.
+	MaxResponseLines int
+	// MaxResponseBytes is the maximum total bytes of formatted output.
+	MaxResponseBytes int
+}
+
+const (
+	// DefaultMaxFileSize is the default maximum file size (1 MB).
+	DefaultMaxFileSize int64 = 1 << 20
+	// DefaultMaxLineBytes is the default per-line truncation threshold.
+	DefaultMaxLineBytes int64 = 1024
+	// DefaultMaxResponseLines is the default max lines per response.
+	DefaultMaxResponseLines int64 = 2000
+	// DefaultMaxResponseBytes is the default max response size (32 KB).
+	DefaultMaxResponseBytes int64 = 32768
+)
+
+// DefaultReadFileLinesLimits returns the default limits.
+func DefaultReadFileLinesLimits() ReadFileLinesLimits {
+	return ReadFileLinesLimits{
+		MaxFileSize:      DefaultMaxFileSize,
+		MaxLineBytes:     int(DefaultMaxLineBytes),
+		MaxResponseLines: int(DefaultMaxResponseLines),
+		MaxResponseBytes: int(DefaultMaxResponseBytes),
+	}
+}
+
 type FileEdit struct {
-	Search  string `json:"search"`
-	Replace string `json:"replace"`
+	Search     string `json:"search"`
+	Replace    string `json:"replace"`
+	ReplaceAll bool   `json:"replace_all,omitempty"`
 }
 
 type FileEdits struct {
@@ -592,14 +1078,204 @@ type FileEdits struct {
 
 type FileEditRequest struct {
 	Files []FileEdits `json:"files"`
+	// IncludeDiff asks the agent to compute a unified diff per file
+	// and return it in FileEditResponse.Files[i].Diff. When false
+	// (default) the agent skips diff computation and Files is nil.
+	IncludeDiff bool `json:"include_diff,omitempty"`
 }
 
-// EditFiles performs search and replace edits on one or more files.
-func (c *agentConn) EditFiles(ctx context.Context, edits FileEditRequest) error {
+// FileEditResponse is the success response for the edit-files endpoint.
+// When the request's IncludeDiff flag is set, Files contains one entry
+// per edited file in request order. Each entry's Path matches the
+// caller-supplied path (pre-symlink resolution).
+//
+// The slice is named Files (rather than Diffs) so future work can
+// hang per-file errors or status off each element without a second
+// wire break.
+type FileEditResponse struct {
+	Files []FileEditResult `json:"files,omitempty"`
+}
+
+// FileEditResult carries the outcome of editing one file. Path is
+// the original caller-supplied path, not any symlink-resolved
+// target. Diff is the unified-diff string produced when the
+// caller set FileEditRequest.IncludeDiff; it is empty for no-op
+// edits or when diffs were not requested.
+type FileEditResult struct {
+	Path string `json:"path"`
+	Diff string `json:"diff"`
+}
+
+// ListMCPToolsResponse is the response from the agent's
+// MCP tool discovery endpoint.
+type ListMCPToolsResponse struct {
+	Tools         []MCPToolInfo      `json:"tools"`
+	FailedServers []MCPServerFailure `json:"failed_servers,omitempty"`
+}
+
+// MCPToolInfo describes a single tool discovered from an MCP
+// server configured in the workspace's .mcp.json file.
+type MCPToolInfo struct {
+	// ServerName is the key from .mcp.json (e.g. "github").
+	ServerName string `json:"server_name"`
+	// Name is the prefixed tool name: "serverName__toolName".
+	Name string `json:"name"`
+	// Description is the tool's human-readable description.
+	Description string `json:"description"`
+	// Schema is the JSON Schema for the tool's input parameters.
+	Schema map[string]any `json:"schema"`
+	// Required lists required parameter names.
+	Required []string `json:"required"`
+}
+
+// MCPServerFailure describes an MCP server that failed to connect.
+type MCPServerFailure struct {
+	// Name is the server name/key from the config.
+	Name string `json:"name"`
+	// Error is the human-readable error message from the last connection attempt.
+	Error string `json:"error"`
+	// LastAttempt is when the last connection attempt was made.
+	LastAttempt time.Time `json:"last_attempt"`
+}
+
+// ContextConfigResponse is the response from the agent's context
+// configuration endpoint. Contains pre-read instruction file
+// contents and discovered skill metadata as chat message parts.
+type ContextConfigResponse struct {
+	Parts []codersdk.ChatMessagePart `json:"parts"`
+}
+
+// CallMCPToolRequest is the request body for proxying an MCP
+// tool call through the workspace agent.
+type CallMCPToolRequest struct {
+	// ToolName is the prefixed tool name (e.g. "github__create_issue").
+	ToolName string `json:"tool_name"`
+	// Arguments is the tool input as key-value pairs.
+	Arguments map[string]any `json:"arguments"`
+}
+
+// CallMCPToolResponse is the response from a proxied MCP tool call.
+type CallMCPToolResponse struct {
+	Content []MCPToolContent `json:"content"`
+	IsError bool             `json:"is_error"`
+}
+
+// MCPToolContent is a single content block in an MCP tool response.
+type MCPToolContent struct {
+	Type      string `json:"type"` // "text", "image", "audio", "resource"
+	Text      string `json:"text,omitempty"`
+	Data      string `json:"data,omitempty"` // base64 for binary
+	MediaType string `json:"media_type,omitempty"`
+}
+
+// StartProcess starts a new process on the workspace agent.
+func (c *agentConn) StartProcess(ctx context.Context, req StartProcessRequest) (StartProcessResponse, error) {
 	ctx, span := tracing.StartSpan(ctx)
 	defer span.End()
+	res, err := c.apiRequest(ctx, http.MethodPost, "/api/v0/processes/start", req)
+	if err != nil {
+		return StartProcessResponse{}, xerrors.Errorf("do request: %w", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return StartProcessResponse{}, codersdk.ReadBodyAsError(res)
+	}
+	var resp StartProcessResponse
+	return resp, json.NewDecoder(res.Body).Decode(&resp)
+}
 
-	res, err := c.apiRequest(ctx, http.MethodPost, "/api/v0/edit-files", edits)
+// ListProcesses returns information about tracked processes on the agent.
+func (c *agentConn) ListProcesses(ctx context.Context) (ListProcessesResponse, error) {
+	ctx, span := tracing.StartSpan(ctx)
+	defer span.End()
+	res, err := c.apiRequest(ctx, http.MethodGet, "/api/v0/processes/list", nil)
+	if err != nil {
+		return ListProcessesResponse{}, xerrors.Errorf("do request: %w", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return ListProcessesResponse{}, codersdk.ReadBodyAsError(res)
+	}
+	var resp ListProcessesResponse
+	return resp, json.NewDecoder(res.Body).Decode(&resp)
+}
+
+// ListMCPTools returns tools discovered from MCP servers configured
+// in the workspace.
+func (c *agentConn) ListMCPTools(ctx context.Context) (ListMCPToolsResponse, error) {
+	ctx, span := tracing.StartSpan(ctx)
+	defer span.End()
+	res, err := c.apiRequest(ctx, http.MethodGet, "/api/v0/mcp/tools", nil)
+	if err != nil {
+		return ListMCPToolsResponse{}, xerrors.Errorf("do request: %w", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return ListMCPToolsResponse{}, codersdk.ReadBodyAsError(res)
+	}
+	var resp ListMCPToolsResponse
+	return resp, json.NewDecoder(res.Body).Decode(&resp)
+}
+
+// ContextConfig returns the resolved context configuration from
+// the workspace agent.
+func (c *agentConn) ContextConfig(ctx context.Context) (ContextConfigResponse, error) {
+	ctx, span := tracing.StartSpan(ctx)
+	defer span.End()
+	res, err := c.apiRequest(ctx, http.MethodGet, "/api/v0/context-config", nil)
+	if err != nil {
+		return ContextConfigResponse{}, xerrors.Errorf("do request: %w", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return ContextConfigResponse{}, codersdk.ReadBodyAsError(res)
+	}
+	var resp ContextConfigResponse
+	return resp, json.NewDecoder(res.Body).Decode(&resp)
+}
+
+// CallMCPTool proxies a tool call to an MCP server running in
+// the workspace.
+func (c *agentConn) CallMCPTool(ctx context.Context, req CallMCPToolRequest) (CallMCPToolResponse, error) {
+	ctx, span := tracing.StartSpan(ctx)
+	defer span.End()
+	res, err := c.apiRequest(ctx, http.MethodPost, "/api/v0/mcp/call-tool", req)
+	if err != nil {
+		return CallMCPToolResponse{}, xerrors.Errorf("do request: %w", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return CallMCPToolResponse{}, codersdk.ReadBodyAsError(res)
+	}
+	var resp CallMCPToolResponse
+	return resp, json.NewDecoder(res.Body).Decode(&resp)
+}
+
+// ProcessOutput returns the output of a tracked process on the agent.
+func (c *agentConn) ProcessOutput(ctx context.Context, id string, opts *ProcessOutputOptions) (ProcessOutputResponse, error) {
+	ctx, span := tracing.StartSpan(ctx)
+	defer span.End()
+	path := "/api/v0/processes/" + id + "/output"
+	if opts != nil && opts.Wait {
+		path += "?wait=true"
+	}
+	res, err := c.apiRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return ProcessOutputResponse{}, xerrors.Errorf("do request: %w", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return ProcessOutputResponse{}, codersdk.ReadBodyAsError(res)
+	}
+	var resp ProcessOutputResponse
+	return resp, json.NewDecoder(res.Body).Decode(&resp)
+}
+
+// SignalProcess sends a signal to a tracked process on the agent.
+func (c *agentConn) SignalProcess(ctx context.Context, id string, signal string) error {
+	ctx, span := tracing.StartSpan(ctx)
+	defer span.End()
+	res, err := c.apiRequest(ctx, http.MethodPost, "/api/v0/processes/"+id+"/signal", SignalProcessRequest{Signal: signal})
 	if err != nil {
 		return xerrors.Errorf("do request: %w", err)
 	}
@@ -607,12 +1283,42 @@ func (c *agentConn) EditFiles(ctx context.Context, edits FileEditRequest) error 
 	if res.StatusCode != http.StatusOK {
 		return codersdk.ReadBodyAsError(res)
 	}
-
 	var m codersdk.Response
 	if err := json.NewDecoder(res.Body).Decode(&m); err != nil {
 		return xerrors.Errorf("decode response body: %w", err)
 	}
 	return nil
+}
+
+// EditFiles performs search and replace edits on one or more files.
+// When edits.IncludeDiff is true, the returned FileEditResponse
+// carries a unified diff per edited file.
+func (c *agentConn) EditFiles(ctx context.Context, edits FileEditRequest) (FileEditResponse, error) {
+	ctx, span := tracing.StartSpan(ctx)
+	defer span.End()
+
+	res, err := c.apiRequest(ctx, http.MethodPost, "/api/v0/edit-files", edits)
+	if err != nil {
+		return FileEditResponse{}, xerrors.Errorf("do request: %w", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return FileEditResponse{}, codersdk.ReadBodyAsError(res)
+	}
+
+	var resp FileEditResponse
+	if err := json.NewDecoder(res.Body).Decode(&resp); err != nil {
+		return FileEditResponse{}, xerrors.Errorf("decode response body: %w", err)
+	}
+	return resp, nil
+}
+
+func agentAPIPath(path string, query neturl.Values) string {
+	if len(query) == 0 {
+		return path
+	}
+
+	return path + "?" + query.Encode()
 }
 
 // apiRequest makes a request to the workspace agent's HTTP API server.
@@ -646,6 +1352,15 @@ func (c *agentConn) apiRequest(ctx context.Context, method, path string, body in
 	req, err := http.NewRequestWithContext(ctx, method, url, r)
 	if err != nil {
 		return nil, xerrors.Errorf("new http api request to %q: %w", url, err)
+	}
+
+	c.headersMu.RLock()
+	extraHeaders := c.extraHeaders.Clone()
+	c.headersMu.RUnlock()
+	for key, values := range extraHeaders {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
 	}
 
 	return c.apiClient().Do(req)

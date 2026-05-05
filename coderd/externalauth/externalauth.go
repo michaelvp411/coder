@@ -15,16 +15,17 @@ import (
 	"time"
 
 	"github.com/dustin/go-humanize"
-	"golang.org/x/oauth2"
-	"golang.org/x/xerrors"
-
 	"github.com/google/go-github/v43/github"
 	"github.com/sqlc-dev/pqtype"
+	"golang.org/x/oauth2"
 	xgithub "golang.org/x/oauth2/github"
+	"golang.org/x/xerrors"
 
 	"github.com/coder/coder/v2/coderd/database"
 	"github.com/coder/coder/v2/coderd/database/dbtime"
+	"github.com/coder/coder/v2/coderd/externalauth/gitprovider"
 	"github.com/coder/coder/v2/coderd/promoauth"
+	"github.com/coder/coder/v2/coderd/util/slice"
 	"github.com/coder/coder/v2/codersdk"
 	"github.com/coder/retry"
 )
@@ -82,6 +83,10 @@ type Config struct {
 	// a Git clone. e.g. "Username for 'https://github.com':"
 	// The regex would be `github\.com`..
 	Regex *regexp.Regexp
+	// APIBaseURL is the base URL for provider REST API calls
+	// (e.g., "https://api.github.com" for GitHub). Derived from
+	// defaults when not explicitly configured.
+	APIBaseURL string
 	// AppInstallURL is for GitHub App's (and hopefully others eventually)
 	// to provide a link to install the app. There's installation
 	// of the application, and user authentication. It's possible
@@ -90,19 +95,37 @@ type Config struct {
 	// AppInstallationsURL is an API endpoint that returns a list of
 	// installations for the user. This is used for GitHub Apps.
 	AppInstallationsURL string
+	// Deprecated: Injected MCP in AI Bridge is deprecated and will be removed in a future release.
+	//
 	// MCPURL is the endpoint that clients must use to communicate with the associated
 	// MCP server.
 	MCPURL string
+	// Deprecated: Injected MCP in AI Bridge is deprecated and will be removed in a future release.
+	//
 	// MCPToolAllowRegex is a [regexp.Regexp] to match tools which are explicitly allowed to be
 	// injected into Coder AI Bridge upstream requests.
 	// In the case of conflicts, [MCPToolDenylistPattern] overrides items evaluated by this list.
 	// This field can be nil if unspecified in the config.
 	MCPToolAllowRegex *regexp.Regexp
+	// Deprecated: Injected MCP in AI Bridge is deprecated and will be removed in a future release.
+	//
 	// MCPToolDenyRegex is a [regexp.Regexp] to match tools which are explicitly NOT allowed to be
 	// injected into Coder AI Bridge upstream requests.
 	// In the case of conflicts, items evaluated by this list override [MCPToolAllowRegex].
 	// This field can be nil if unspecified in the config.
-	MCPToolDenyRegex *regexp.Regexp
+	MCPToolDenyRegex              *regexp.Regexp
+	CodeChallengeMethodsSupported []promoauth.Oauth2PKCEChallengeMethod
+}
+
+// Git returns a Provider for this config if the provider type
+// is a supported git hosting provider. Returns nil for non-git
+// providers (e.g. Slack, JFrog).
+func (c *Config) Git(client *http.Client) gitprovider.Provider {
+	norm := strings.ToLower(c.Type)
+	if !codersdk.EnhancedExternalAuthProvider(norm).Git() {
+		return nil
+	}
+	return gitprovider.New(norm, c.APIBaseURL, client)
 }
 
 // GenerateTokenExtra generates the extra token data to store in the database.
@@ -110,7 +133,7 @@ func (c *Config) GenerateTokenExtra(token *oauth2.Token) (pqtype.NullRawMessage,
 	if len(c.ExtraTokenKeys) == 0 {
 		return pqtype.NullRawMessage{}, nil
 	}
-	extraMap := map[string]interface{}{}
+	extraMap := map[string]any{}
 	for _, key := range c.ExtraTokenKeys {
 		extraMap[key] = token.Extra(key)
 	}
@@ -138,8 +161,6 @@ func IsInvalidTokenError(err error) bool {
 }
 
 // RefreshToken automatically refreshes the token if expired and permitted.
-// If an error is returned, the token is either invalid, or an error occurred.
-// Use 'IsInvalidTokenError(err)' to determine the difference.
 func (c *Config) RefreshToken(ctx context.Context, db database.Store, externalAuthLink database.ExternalAuthLink) (database.ExternalAuthLink, error) {
 	// If the token is expired and refresh is disabled, we prompt
 	// the user to authenticate again.
@@ -179,6 +200,24 @@ func (c *Config) RefreshToken(ctx context.Context, db database.Store, externalAu
 		//
 		// The error message is saved for debugging purposes.
 		if isFailedRefresh(existingToken, err) {
+			// Before caching the failure, re-read the external auth link
+			// from the database. A concurrent request may have already
+			// refreshed the token successfully, consuming the single-use
+			// refresh token (e.g., GitHub App tokens). In that case our
+			// "bad_refresh_token" error is a false positive from losing
+			// the race, and we should use the winner's updated token
+			// instead of poisoning the database with a cached failure.
+			currentLink, readErr := db.GetExternalAuthLink(ctx, database.GetExternalAuthLinkParams{
+				ProviderID: externalAuthLink.ProviderID,
+				UserID:     externalAuthLink.UserID,
+			})
+			if readErr == nil && currentLink.OAuthRefreshToken != externalAuthLink.OAuthRefreshToken {
+				// Another caller won the refresh race and stored a new
+				// refresh token. Return their updated link instead of
+				// caching a failure.
+				return currentLink, nil
+			}
+
 			reason := err.Error()
 			if len(reason) > failureReasonLimit {
 				// Limit the length of the error message to prevent
@@ -195,6 +234,9 @@ func (c *Config) RefreshToken(ctx context.Context, db database.Store, externalAu
 				UpdatedAt:              dbtime.Now(),
 				ProviderID:             externalAuthLink.ProviderID,
 				UserID:                 externalAuthLink.UserID,
+				// Optimistic lock: only clear the token if it hasn't been
+				// updated by a concurrent caller that won the refresh race.
+				OldOauthRefreshToken: externalAuthLink.OAuthRefreshToken,
 			})
 			if dbExecErr != nil {
 				// This error should be rare.
@@ -237,6 +279,37 @@ func (c *Config) RefreshToken(ctx context.Context, db database.Store, externalAu
 		return externalAuthLink, xerrors.Errorf("generate token extra: %w", err)
 	}
 
+	// Persist the refreshed token to the DB before validation. GitHub
+	// rotates refresh tokens on every use, so the old refresh token is
+	// already invalid on the IDP side. If we validated first and the
+	// validation endpoint was unavailable (e.g. rate-limited 403), the
+	// new token would be silently lost and the user would be forced to
+	// re-authenticate manually.
+	// Use a detached context for the DB write only. The IDP already
+	// consumed the old refresh token, so if the caller's request
+	// context is canceled mid-save, the new token would be lost.
+	persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer persistCancel()
+
+	originalAccessToken := externalAuthLink.OAuthAccessToken
+	if token.AccessToken != originalAccessToken {
+		updatedAuthLink, err := db.UpdateExternalAuthLink(persistCtx, database.UpdateExternalAuthLinkParams{
+			ProviderID:             c.ID,
+			UserID:                 externalAuthLink.UserID,
+			UpdatedAt:              dbtime.Now(),
+			OAuthAccessToken:       token.AccessToken,
+			OAuthAccessTokenKeyID:  sql.NullString{}, // dbcrypt will update as required
+			OAuthRefreshToken:      token.RefreshToken,
+			OAuthRefreshTokenKeyID: sql.NullString{}, // dbcrypt will update as required
+			OAuthExpiry:            token.Expiry,
+			OAuthExtra:             extra,
+		})
+		if err != nil {
+			return updatedAuthLink, xerrors.Errorf("persist refreshed token: %w", err)
+		}
+		externalAuthLink = updatedAuthLink
+	}
+
 	r := retry.New(50*time.Millisecond, 200*time.Millisecond)
 	// See the comment below why the retry and cancel is required.
 	retryCtx, retryCtxCancel := context.WithTimeout(ctx, time.Second)
@@ -261,43 +334,30 @@ validate:
 		return externalAuthLink, InvalidTokenError("token failed to validate")
 	}
 
-	if token.AccessToken != externalAuthLink.OAuthAccessToken {
-		updatedAuthLink, err := db.UpdateExternalAuthLink(ctx, database.UpdateExternalAuthLinkParams{
-			ProviderID:             c.ID,
-			UserID:                 externalAuthLink.UserID,
-			UpdatedAt:              dbtime.Now(),
-			OAuthAccessToken:       token.AccessToken,
-			OAuthAccessTokenKeyID:  sql.NullString{}, // dbcrypt will update as required
-			OAuthRefreshToken:      token.RefreshToken,
-			OAuthRefreshTokenKeyID: sql.NullString{}, // dbcrypt will update as required
-			OAuthExpiry:            token.Expiry,
-			OAuthExtra:             extra,
+	// Update the associated user's github.com user ID if the token
+	// is for github.com and validation returned user info.
+	if token.AccessToken != originalAccessToken && IsGithubDotComURL(c.AuthCodeURL("")) && user != nil {
+		err = db.UpdateUserGithubComUserID(ctx, database.UpdateUserGithubComUserIDParams{
+			ID: externalAuthLink.UserID,
+			GithubComUserID: sql.NullInt64{
+				Int64: user.ID,
+				Valid: true,
+			},
 		})
 		if err != nil {
-			return updatedAuthLink, xerrors.Errorf("update external auth link: %w", err)
-		}
-		externalAuthLink = updatedAuthLink
-
-		// Update the associated users github.com username if the token is for github.com.
-		if IsGithubDotComURL(c.AuthCodeURL("")) && user != nil {
-			err = db.UpdateUserGithubComUserID(ctx, database.UpdateUserGithubComUserIDParams{
-				ID: externalAuthLink.UserID,
-				GithubComUserID: sql.NullInt64{
-					Int64: user.ID,
-					Valid: true,
-				},
-			})
-			if err != nil {
-				return externalAuthLink, xerrors.Errorf("update user github com user id: %w", err)
-			}
+			return externalAuthLink, xerrors.Errorf("update user github com user id: %w", err)
 		}
 	}
 
 	return externalAuthLink, nil
 }
 
-// ValidateToken ensures the Git token provided is valid!
+// ValidateToken checks if the Git token provided is valid.
 // The user is optionally returned if the provider supports it.
+// Returns valid=true when: the provider confirmed the token,
+// no ValidateURL is configured, or the validation endpoint
+// returned a rate-limited response (403 with rate-limit headers
+// or 429).
 func (c *Config) ValidateToken(ctx context.Context, link *oauth2.Token) (bool, *codersdk.ExternalAuthUser, error) {
 	if link == nil {
 		return false, nil, xerrors.New("validate external auth token: token is nil")
@@ -321,11 +381,36 @@ func (c *Config) ValidateToken(ctx context.Context, link *oauth2.Token) (bool, *
 		return false, nil, err
 	}
 	defer res.Body.Close()
-	if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
+	switch res.StatusCode {
+	case http.StatusUnauthorized:
 		// The token is no longer valid!
 		return false, nil, nil
-	}
-	if res.StatusCode != http.StatusOK {
+
+	case http.StatusForbidden:
+		// Some providers (notably GitHub) use 403 for both "token
+		// revoked" and "rate limit exceeded." If standard rate-limit
+		// headers are present, the token may still be valid and the
+		// validation endpoint is rejecting for a transient reason.
+		// Treat it as optimistically valid rather than discarding
+		// the token.
+		if isRateLimited(res) {
+			return true, nil, nil
+		}
+		// No rate-limit headers: genuine token revocation or
+		// permission error.
+		return false, nil, nil
+
+	case http.StatusTooManyRequests:
+		// GitHub can return either 403 or 429 for rate limits.
+		// Treat 429 the same as a rate-limited 403: optimistically
+		// valid. The token was likely just issued by the IDP; the
+		// validation endpoint is transiently overloaded.
+		return true, nil, nil
+
+	case http.StatusOK:
+		// Success, handled below.
+
+	default:
 		data, _ := io.ReadAll(res.Body)
 		return false, nil, xerrors.Errorf("status %d: body: %s", res.StatusCode, data)
 	}
@@ -723,24 +808,26 @@ func ConvertConfig(instrument *promoauth.Factory, entries []codersdk.ExternalAut
 		}
 
 		cfg := &Config{
-			InstrumentedOAuth2Config: instrumented,
-			ID:                       entry.ID,
-			ClientID:                 entry.ClientID,
-			ClientSecret:             entry.ClientSecret,
-			Regex:                    regex,
-			Type:                     entry.Type,
-			NoRefresh:                entry.NoRefresh,
-			ValidateURL:              entry.ValidateURL,
-			RevokeURL:                entry.RevokeURL,
-			RevokeTimeout:            tokenRevocationTimeout,
-			AppInstallationsURL:      entry.AppInstallationsURL,
-			AppInstallURL:            entry.AppInstallURL,
-			DisplayName:              entry.DisplayName,
-			DisplayIcon:              entry.DisplayIcon,
-			ExtraTokenKeys:           entry.ExtraTokenKeys,
-			MCPURL:                   entry.MCPURL,
-			MCPToolAllowRegex:        mcpToolAllow,
-			MCPToolDenyRegex:         mcpToolDeny,
+			InstrumentedOAuth2Config:      instrumented,
+			ID:                            entry.ID,
+			ClientID:                      entry.ClientID,
+			ClientSecret:                  entry.ClientSecret,
+			Regex:                         regex,
+			APIBaseURL:                    entry.APIBaseURL,
+			Type:                          entry.Type,
+			NoRefresh:                     entry.NoRefresh,
+			ValidateURL:                   entry.ValidateURL,
+			RevokeURL:                     entry.RevokeURL,
+			RevokeTimeout:                 tokenRevocationTimeout,
+			AppInstallationsURL:           entry.AppInstallationsURL,
+			AppInstallURL:                 entry.AppInstallURL,
+			DisplayName:                   entry.DisplayName,
+			DisplayIcon:                   entry.DisplayIcon,
+			ExtraTokenKeys:                entry.ExtraTokenKeys,
+			MCPURL:                        entry.MCPURL,
+			MCPToolAllowRegex:             mcpToolAllow,
+			MCPToolDenyRegex:              mcpToolDeny,
+			CodeChallengeMethodsSupported: slice.StringEnums[promoauth.Oauth2PKCEChallengeMethod](entry.CodeChallengeMethodsSupported),
 		}
 
 		if entry.DeviceFlow {
@@ -763,7 +850,7 @@ func ConvertConfig(instrument *promoauth.Factory, entries []codersdk.ExternalAut
 
 // applyDefaultsToConfig applies defaults to the config entry.
 func applyDefaultsToConfig(config *codersdk.ExternalAuthConfig) {
-	configType := codersdk.EnhancedExternalAuthProvider(config.Type)
+	configType := codersdk.EnhancedExternalAuthProvider(strings.ToLower(config.Type))
 	if configType == "bitbucket" {
 		// For backwards compatibility, we need to support the "bitbucket" string.
 		configType = codersdk.EnhancedExternalAuthProviderBitBucketCloud
@@ -780,7 +867,7 @@ func applyDefaultsToConfig(config *codersdk.ExternalAuthConfig) {
 	}
 
 	// Dynamic defaults
-	switch codersdk.EnhancedExternalAuthProvider(config.Type) {
+	switch configType {
 	case codersdk.EnhancedExternalAuthProviderGitHub:
 		copyDefaultSettings(config, gitHubDefaults(config))
 		return
@@ -800,8 +887,7 @@ func applyDefaultsToConfig(config *codersdk.ExternalAuthConfig) {
 		copyDefaultSettings(config, azureDevopsEntraDefaults(config))
 		return
 	default:
-		// No defaults for this type. We still want to run this apply with
-		// an empty set of defaults.
+		// Global defaults are specified at the end of the `copyDefaultSettings` function.
 		copyDefaultSettings(config, codersdk.ExternalAuthConfig{})
 		return
 	}
@@ -844,6 +930,9 @@ func copyDefaultSettings(config *codersdk.ExternalAuthConfig, defaults codersdk.
 	if len(config.ExtraTokenKeys) == 0 {
 		config.ExtraTokenKeys = defaults.ExtraTokenKeys
 	}
+	if config.CodeChallengeMethodsSupported == nil {
+		config.CodeChallengeMethodsSupported = defaults.CodeChallengeMethodsSupported
+	}
 
 	// Apply defaults if it's still empty...
 	if config.ID == "" {
@@ -855,6 +944,22 @@ func copyDefaultSettings(config *codersdk.ExternalAuthConfig, defaults codersdk.
 	if config.DisplayIcon == "" {
 		// This is a key emoji.
 		config.DisplayIcon = "/emojis/1f511.png"
+	}
+	if config.CodeChallengeMethodsSupported == nil {
+		config.CodeChallengeMethodsSupported = []string{string(promoauth.PKCEChallengeMethodSha256)}
+	}
+
+	// Set default API base URL for providers that need one.
+	if config.APIBaseURL == "" {
+		normType := strings.ToLower(config.Type)
+		switch codersdk.EnhancedExternalAuthProvider(normType) {
+		case codersdk.EnhancedExternalAuthProviderGitHub:
+			config.APIBaseURL = "https://api.github.com"
+		case codersdk.EnhancedExternalAuthProviderGitLab:
+			config.APIBaseURL = "https://gitlab.com/api/v4"
+		case codersdk.EnhancedExternalAuthProviderGitea:
+			config.APIBaseURL = "https://gitea.com/api/v1"
+		}
 	}
 }
 
@@ -869,9 +974,10 @@ func gitHubDefaults(config *codersdk.ExternalAuthConfig) codersdk.ExternalAuthCo
 		DisplayIcon: "/icon/github.svg",
 		Regex:       `^(https?://)?github\.com(/.*)?$`,
 		// "workflow" is required for managing GitHub Actions in a repository.
-		Scopes:              []string{"repo", "workflow"},
-		DeviceCodeURL:       "https://github.com/login/device/code",
-		AppInstallationsURL: "https://api.github.com/user/installations",
+		Scopes:                        []string{"repo", "workflow"},
+		DeviceCodeURL:                 "https://github.com/login/device/code",
+		AppInstallationsURL:           "https://api.github.com/user/installations",
+		CodeChallengeMethodsSupported: []string{string(promoauth.PKCEChallengeMethodSha256)},
 	}
 
 	if config.RevokeURL == "" && config.ClientID != "" {
@@ -886,6 +992,8 @@ func bitbucketServerDefaults(config *codersdk.ExternalAuthConfig) codersdk.Exter
 		DisplayName: "Bitbucket Server",
 		Scopes:      []string{"PUBLIC_REPOS", "REPO_READ", "REPO_WRITE"},
 		DisplayIcon: "/icon/bitbucket.svg",
+		// TODO: Investigate if 'S256' is accepted and PKCE is supported
+		CodeChallengeMethodsSupported: []string{string(promoauth.PKCEChallengeMethodNone)},
 	}
 	// Bitbucket servers will have some base url, e.g. https://bitbucket.coder.com.
 	// We will grab this from the Auth URL. This choice is a bit arbitrary,
@@ -923,14 +1031,15 @@ func bitbucketServerDefaults(config *codersdk.ExternalAuthConfig) codersdk.Exter
 // Any user specific fields will override this if provided.
 func gitlabDefaults(config *codersdk.ExternalAuthConfig) codersdk.ExternalAuthConfig {
 	cloud := codersdk.ExternalAuthConfig{
-		AuthURL:     "https://gitlab.com/oauth/authorize",
-		TokenURL:    "https://gitlab.com/oauth/token",
-		ValidateURL: "https://gitlab.com/oauth/token/info",
-		RevokeURL:   "https://gitlab.com/oauth/revoke",
-		DisplayName: "GitLab",
-		DisplayIcon: "/icon/gitlab.svg",
-		Regex:       `^(https?://)?gitlab\.com(/.*)?$`,
-		Scopes:      []string{"write_repository"},
+		AuthURL:                       "https://gitlab.com/oauth/authorize",
+		TokenURL:                      "https://gitlab.com/oauth/token",
+		ValidateURL:                   "https://gitlab.com/oauth/token/info",
+		RevokeURL:                     "https://gitlab.com/oauth/revoke",
+		DisplayName:                   "GitLab",
+		DisplayIcon:                   "/icon/gitlab.svg",
+		Regex:                         `^(https?://)?gitlab\.com(/.*)?$`,
+		Scopes:                        []string{"write_repository"},
+		CodeChallengeMethodsSupported: []string{string(promoauth.PKCEChallengeMethodSha256)},
 	}
 
 	if config.AuthURL == "" || config.AuthURL == cloud.AuthURL {
@@ -946,14 +1055,15 @@ func gitlabDefaults(config *codersdk.ExternalAuthConfig) codersdk.ExternalAuthCo
 
 	// At this point, assume it is self-hosted and use the AuthURL
 	return codersdk.ExternalAuthConfig{
-		DisplayName: cloud.DisplayName,
-		Scopes:      cloud.Scopes,
-		DisplayIcon: cloud.DisplayIcon,
-		AuthURL:     au.ResolveReference(&url.URL{Path: "/oauth/authorize"}).String(),
-		TokenURL:    au.ResolveReference(&url.URL{Path: "/oauth/token"}).String(),
-		ValidateURL: au.ResolveReference(&url.URL{Path: "/oauth/token/info"}).String(),
-		RevokeURL:   au.ResolveReference(&url.URL{Path: "/oauth/revoke"}).String(),
-		Regex:       fmt.Sprintf(`^(https?://)?%s(/.*)?$`, strings.ReplaceAll(au.Host, ".", `\.`)),
+		DisplayName:                   cloud.DisplayName,
+		Scopes:                        cloud.Scopes,
+		DisplayIcon:                   cloud.DisplayIcon,
+		AuthURL:                       au.ResolveReference(&url.URL{Path: "/oauth/authorize"}).String(),
+		TokenURL:                      au.ResolveReference(&url.URL{Path: "/oauth/token"}).String(),
+		ValidateURL:                   au.ResolveReference(&url.URL{Path: "/oauth/token/info"}).String(),
+		RevokeURL:                     au.ResolveReference(&url.URL{Path: "/oauth/revoke"}).String(),
+		Regex:                         fmt.Sprintf(`^(https?://)?%s(/.*)?$`, strings.ReplaceAll(au.Host, ".", `\.`)),
+		CodeChallengeMethodsSupported: []string{string(promoauth.PKCEChallengeMethodSha256)},
 	}
 }
 
@@ -962,6 +1072,8 @@ func jfrogArtifactoryDefaults(config *codersdk.ExternalAuthConfig) codersdk.Exte
 		DisplayName: "JFrog Artifactory",
 		Scopes:      []string{"applied-permissions/user"},
 		DisplayIcon: "/icon/jfrog.svg",
+		// TODO: Investigate if 'S256' is accepted and PKCE is supported
+		CodeChallengeMethodsSupported: []string{string(promoauth.PKCEChallengeMethodNone)},
 	}
 	// Artifactory servers will have some base url, e.g. https://jfrog.coder.com.
 	// We will grab this from the Auth URL. This choice is not arbitrary. It is a
@@ -997,9 +1109,10 @@ func jfrogArtifactoryDefaults(config *codersdk.ExternalAuthConfig) codersdk.Exte
 
 func giteaDefaults(config *codersdk.ExternalAuthConfig) codersdk.ExternalAuthConfig {
 	defaults := codersdk.ExternalAuthConfig{
-		DisplayName: "Gitea",
-		Scopes:      []string{"read:repository", " write:repository", "read:user"},
-		DisplayIcon: "/icon/gitea.svg",
+		DisplayName:                   "Gitea",
+		Scopes:                        []string{"read:repository", " write:repository", "read:user"},
+		DisplayIcon:                   "/icon/gitea.svg",
+		CodeChallengeMethodsSupported: []string{string(promoauth.PKCEChallengeMethodSha256)},
 	}
 	// Gitea's servers will have some base url, e.g: https://gitea.coder.com.
 	// If an auth url is not set, we will assume they are using the default
@@ -1031,6 +1144,8 @@ func azureDevopsEntraDefaults(config *codersdk.ExternalAuthConfig) codersdk.Exte
 		DisplayName: "Azure DevOps (Entra)",
 		DisplayIcon: "/icon/azure-devops.svg",
 		Regex:       `^(https?://)?dev\.azure\.com(/.*)?$`,
+		// TODO: Investigate if 'S256' is accepted and PKCE is supported
+		CodeChallengeMethodsSupported: []string{string(promoauth.PKCEChallengeMethodNone)},
 	}
 	// The tenant ID is required for urls and is in the auth url.
 	if config.AuthURL == "" {
@@ -1069,6 +1184,8 @@ var staticDefaults = map[codersdk.EnhancedExternalAuthProvider]codersdk.External
 		DisplayIcon: "/icon/azure-devops.svg",
 		Regex:       `^(https?://)?dev\.azure\.com(/.*)?$`,
 		Scopes:      []string{"vso.code_write"},
+		// TODO: Investigate if 'S256' is accepted and PKCE is supported
+		CodeChallengeMethodsSupported: []string{string(promoauth.PKCEChallengeMethodNone)},
 	},
 	codersdk.EnhancedExternalAuthProviderBitBucketCloud: {
 		AuthURL:     "https://bitbucket.org/site/oauth2/authorize",
@@ -1078,6 +1195,8 @@ var staticDefaults = map[codersdk.EnhancedExternalAuthProvider]codersdk.External
 		DisplayIcon: "/icon/bitbucket.svg",
 		Regex:       `^(https?://)?bitbucket\.org(/.*)?$`,
 		Scopes:      []string{"account", "repository:write"},
+		// TODO: Investigate if 'S256' is accepted and PKCE is supported
+		CodeChallengeMethodsSupported: []string{string(promoauth.PKCEChallengeMethodNone)},
 	},
 	codersdk.EnhancedExternalAuthProviderSlack: {
 		AuthURL:     "https://slack.com/oauth/v2/authorize",
@@ -1087,6 +1206,8 @@ var staticDefaults = map[codersdk.EnhancedExternalAuthProvider]codersdk.External
 		DisplayIcon: "/icon/slack.svg",
 		// See: https://api.slack.com/authentication/oauth-v2#exchanging
 		ExtraTokenKeys: []string{"authed_user"},
+		// TODO: Investigate if 'S256' is accepted and PKCE is supported
+		CodeChallengeMethodsSupported: []string{string(promoauth.PKCEChallengeMethodNone)},
 	},
 }
 
@@ -1180,6 +1301,32 @@ func IsGithubDotComURL(str string) bool {
 	return ghURL.Host == "github.com"
 }
 
+// isRateLimited checks whether an HTTP response indicates a rate
+// limit rather than a genuine authorization failure. It returns
+// true if either X-RateLimit-Remaining is "0" (primary) or
+// Retry-After is present (secondary). OR logic is intentional:
+// GitHub secondary limits can include Retry-After without
+// X-RateLimit-Remaining: 0 (the remaining count tracks the
+// primary quota, not secondary).
+//
+// Does not catch every secondary rate limit. GitHub can return
+// 403 with positive X-RateLimit-Remaining and no Retry-After.
+// Reliable detection of those requires response body inspection.
+// Missing them is not a regression since all 403s were previously
+// treated as invalid.
+func isRateLimited(resp *http.Response) bool {
+	if resp == nil {
+		return false
+	}
+	if resp.Header.Get("Retry-After") != "" {
+		return true
+	}
+	if resp.Header.Get("X-RateLimit-Remaining") == "0" {
+		return true
+	}
+	return false
+}
+
 // isFailedRefresh returns true if the error returned by the TokenSource.Token()
 // is due to a failed refresh. The failure being the refresh token itself.
 // If this returns true, no amount of retries will fix the issue.
@@ -1208,15 +1355,21 @@ func isFailedRefresh(existingToken *oauth2.Token, err error) bool {
 		// Known error codes that indicate a failed refresh.
 		// 'Spec' means the code is defined in the spec.
 		case "bad_refresh_token", // Github
-			"invalid_grant",          // Gitlab & Spec
-			"unauthorized_client",    // Gitea & Spec
-			"unsupported_grant_type": // Spec, refresh not supported
+			"invalid_grant",                // Gitlab & Spec
+			"unauthorized_client",          // Gitea & Spec
+			"unsupported_grant_type",       // Spec, refresh not supported
+			"incorrect_client_credentials", // GitHub, wrong client_id/secret (HTTP 200)
+			"invalid_client":               // RFC 6749 Section 5.2, client auth failed
 			return true
 		}
 
 		switch oauthErr.Response.StatusCode {
-		case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusOK:
-			// Status codes that indicate the request was processed, and rejected.
+		case http.StatusBadRequest, http.StatusUnauthorized, http.StatusOK:
+			// Status codes that indicate the request was processed
+			// and rejected. 403 is intentionally excluded: no known
+			// provider returns 403 from the token endpoint, and the
+			// previous 403 case caused token destruction on
+			// rate-limited refresh attempts.
 			return true
 		case http.StatusInternalServerError, http.StatusTooManyRequests:
 			// These do not indicate a failed refresh, but could be a temporary issue.

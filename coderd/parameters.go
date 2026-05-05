@@ -12,6 +12,7 @@ import (
 	"github.com/coder/coder/v2/coderd/dynamicparameters"
 	"github.com/coder/coder/v2/coderd/httpapi"
 	"github.com/coder/coder/v2/coderd/httpmw"
+	"github.com/coder/coder/v2/coderd/util/slice"
 	"github.com/coder/coder/v2/codersdk"
 	"github.com/coder/coder/v2/codersdk/wsjson"
 	"github.com/coder/websocket"
@@ -26,7 +27,7 @@ import (
 // @Produce json
 // @Param request body codersdk.DynamicParametersRequest true "Initial parameter values"
 // @Success 200 {object} codersdk.DynamicParametersResponse
-// @Router /templateversions/{templateversion}/dynamic-parameters/evaluate [post]
+// @Router /api/v2/templateversions/{templateversion}/dynamic-parameters/evaluate [post]
 func (api *API) templateVersionDynamicParametersEvaluate(rw http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var req codersdk.DynamicParametersRequest
@@ -43,7 +44,7 @@ func (api *API) templateVersionDynamicParametersEvaluate(rw http.ResponseWriter,
 // @Tags Templates
 // @Param templateversion path string true "Template version ID" format(uuid)
 // @Success 101
-// @Router /templateversions/{templateversion}/dynamic-parameters [get]
+// @Router /api/v2/templateversions/{templateversion}/dynamic-parameters [get]
 func (api *API) templateVersionDynamicParametersWebsocket(rw http.ResponseWriter, r *http.Request) {
 	apikey := httpmw.APIKey(r)
 	userID := apikey.UserID
@@ -81,6 +82,7 @@ func (api *API) templateVersionDynamicParameters(listen bool, initial codersdk.D
 
 		renderer, err := dynamicparameters.Prepare(ctx, api.Database, api.FileCache, templateVersion.ID,
 			dynamicparameters.WithTemplateVersion(templateVersion),
+			dynamicparameters.WithLogger(api.Logger.Named("dynamicparameters")),
 		)
 		if err != nil {
 			if httpapi.Is404Error(err) {
@@ -115,14 +117,15 @@ func (*API) handleParameterEvaluate(rw http.ResponseWriter, r *http.Request, ini
 	ctx := r.Context()
 
 	// Send an initial form state, computed without any user input.
-	result, diagnostics := render.Render(ctx, initial.OwnerID, initial.Inputs)
+	result, diagnostics := render.Render(ctx, initial.OwnerID, initial.Inputs, dynamicparameters.IncludeSecretRequirements())
 	response := codersdk.DynamicParametersResponse{
 		ID:          0,
 		Diagnostics: db2sdk.HCLDiagnostics(diagnostics),
 	}
-	if result != nil {
-		response.Parameters = db2sdk.List(result.Parameters, db2sdk.PreviewParameter)
+	if result.Output != nil {
+		response.Parameters = slice.List(result.Output.Parameters, db2sdk.PreviewParameter)
 	}
+	response.SecretRequirements = result.SecretRequirements
 
 	httpapi.Write(ctx, rw, http.StatusOK, response)
 }
@@ -139,7 +142,7 @@ func (api *API) handleParameterWebsocket(rw http.ResponseWriter, r *http.Request
 		})
 		return
 	}
-	go httpapi.Heartbeat(ctx, conn)
+	go httpapi.HeartbeatClose(ctx, api.Logger, cancel, conn)
 
 	stream := wsjson.NewStream[codersdk.DynamicParametersRequest, codersdk.DynamicParametersResponse](
 		conn,
@@ -149,14 +152,15 @@ func (api *API) handleParameterWebsocket(rw http.ResponseWriter, r *http.Request
 	)
 
 	// Send an initial form state, computed without any user input.
-	result, diagnostics := render.Render(ctx, initial.OwnerID, initial.Inputs)
+	result, diagnostics := render.Render(ctx, initial.OwnerID, initial.Inputs, dynamicparameters.IncludeSecretRequirements())
 	response := codersdk.DynamicParametersResponse{
 		ID:          -1, // Always start with -1.
 		Diagnostics: db2sdk.HCLDiagnostics(diagnostics),
 	}
-	if result != nil {
-		response.Parameters = db2sdk.List(result.Parameters, db2sdk.PreviewParameter)
+	if result.Output != nil {
+		response.Parameters = slice.List(result.Output.Parameters, db2sdk.PreviewParameter)
 	}
+	response.SecretRequirements = result.SecretRequirements
 	err = stream.Send(response)
 	if err != nil {
 		stream.Drop()
@@ -186,14 +190,15 @@ func (api *API) handleParameterWebsocket(rw http.ResponseWriter, r *http.Request
 
 			ownerID = update.OwnerID
 
-			result, diagnostics := render.Render(ctx, update.OwnerID, update.Inputs)
+			result, diagnostics := render.Render(ctx, update.OwnerID, update.Inputs, dynamicparameters.IncludeSecretRequirements())
 			response := codersdk.DynamicParametersResponse{
 				ID:          update.ID,
 				Diagnostics: db2sdk.HCLDiagnostics(diagnostics),
 			}
-			if result != nil {
-				response.Parameters = db2sdk.List(result.Parameters, db2sdk.PreviewParameter)
+			if result.Output != nil {
+				response.Parameters = slice.List(result.Output.Parameters, db2sdk.PreviewParameter)
 			}
+			response.SecretRequirements = result.SecretRequirements
 			err = stream.Send(response)
 			if err != nil {
 				stream.Drop()

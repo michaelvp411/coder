@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/mail"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,33 +19,32 @@ import (
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/google/go-github/v43/github"
 	"github.com/google/uuid"
-	"github.com/moby/moby/pkg/namesgenerator"
 	"golang.org/x/oauth2"
 	"golang.org/x/xerrors"
 
-	"cdr.dev/slog"
-
-	"github.com/coder/coder/v2/coderd/cryptokeys"
-	"github.com/coder/coder/v2/coderd/idpsync"
-	"github.com/coder/coder/v2/coderd/jwtutils"
-	"github.com/coder/coder/v2/coderd/telemetry"
-	"github.com/coder/coder/v2/coderd/util/ptr"
-
+	"cdr.dev/slog/v3"
 	"github.com/coder/coder/v2/coderd/apikey"
 	"github.com/coder/coder/v2/coderd/audit"
+	"github.com/coder/coder/v2/coderd/cryptokeys"
 	"github.com/coder/coder/v2/coderd/database"
 	"github.com/coder/coder/v2/coderd/database/dbauthz"
 	"github.com/coder/coder/v2/coderd/database/dbtime"
 	"github.com/coder/coder/v2/coderd/externalauth"
 	"github.com/coder/coder/v2/coderd/httpapi"
 	"github.com/coder/coder/v2/coderd/httpmw"
+	"github.com/coder/coder/v2/coderd/idpsync"
+	"github.com/coder/coder/v2/coderd/jwtutils"
 	"github.com/coder/coder/v2/coderd/notifications"
 	"github.com/coder/coder/v2/coderd/promoauth"
 	"github.com/coder/coder/v2/coderd/rbac"
 	"github.com/coder/coder/v2/coderd/render"
+	"github.com/coder/coder/v2/coderd/telemetry"
 	"github.com/coder/coder/v2/coderd/userpassword"
+	"github.com/coder/coder/v2/coderd/util/namesgenerator"
+	"github.com/coder/coder/v2/coderd/util/ptr"
 	"github.com/coder/coder/v2/codersdk"
 	"github.com/coder/coder/v2/cryptorand"
+	"github.com/coder/coder/v2/site"
 )
 
 type MergedClaimsSource string
@@ -87,7 +86,7 @@ func (o *OAuthConvertStateClaims) Validate(e jwt.Expected) error {
 // @Param request body codersdk.ConvertLoginRequest true "Convert request"
 // @Param user path string true "User ID, name, or me"
 // @Success 201 {object} codersdk.OAuthConversionResponse
-// @Router /users/{user}/convert-login [post]
+// @Router /api/v2/users/{user}/convert-login [post]
 func (api *API) postConvertLoginType(rw http.ResponseWriter, r *http.Request) {
 	var (
 		user              = httpmw.UserParam(r)
@@ -226,7 +225,7 @@ func (api *API) postConvertLoginType(rw http.ResponseWriter, r *http.Request) {
 // @Tags Authorization
 // @Param request body codersdk.RequestOneTimePasscodeRequest true "One-time passcode request"
 // @Success 204
-// @Router /users/otp/request [post]
+// @Router /api/v2/users/otp/request [post]
 func (api *API) postRequestOneTimePasscode(rw http.ResponseWriter, r *http.Request) {
 	var (
 		ctx               = r.Context()
@@ -332,7 +331,7 @@ func (api *API) notifyUserRequestedOneTimePasscode(ctx context.Context, user dat
 // @Tags Authorization
 // @Param request body codersdk.ChangePasswordWithOneTimePasscodeRequest true "Change password request"
 // @Success 204
-// @Router /users/otp/change-password [post]
+// @Router /api/v2/users/otp/change-password [post]
 func (api *API) postChangePasswordWithOneTimePasscode(rw http.ResponseWriter, r *http.Request) {
 	var (
 		err               error
@@ -466,7 +465,7 @@ func (api *API) postChangePasswordWithOneTimePasscode(rw http.ResponseWriter, r 
 // @Tags Authorization
 // @Param request body codersdk.ValidateUserPasswordRequest true "Validate user password request"
 // @Success 200 {object} codersdk.ValidateUserPasswordResponse
-// @Router /users/validate-password [post]
+// @Router /api/v2/users/validate-password [post]
 func (*API) validateUserPassword(rw http.ResponseWriter, r *http.Request) {
 	var (
 		ctx     = r.Context()
@@ -500,7 +499,7 @@ func (*API) validateUserPassword(rw http.ResponseWriter, r *http.Request) {
 // @Tags Authorization
 // @Param request body codersdk.LoginWithPasswordRequest true "Login request"
 // @Success 201 {object} codersdk.LoginWithPasswordResponse
-// @Router /users/login [post]
+// @Router /api/v2/users/login [post]
 func (api *API) postLogin(rw http.ResponseWriter, r *http.Request) {
 	var (
 		ctx               = r.Context()
@@ -648,9 +647,10 @@ func ActivateDormantUser(logger slog.Logger, auditor *atomic.Pointer[audit.Audit
 
 		//nolint:gocritic // System needs to update status of the user account (dormant -> active).
 		newUser, err := db.UpdateUserStatus(dbauthz.AsSystemRestricted(ctx), database.UpdateUserStatusParams{
-			ID:        user.ID,
-			Status:    database.UserStatusActive,
-			UpdatedAt: dbtime.Now(),
+			ID:         user.ID,
+			Status:     database.UserStatusActive,
+			UpdatedAt:  dbtime.Now(),
+			UserIsSeen: true,
 		})
 		if err != nil {
 			logger.Error(ctx, "unable to update user status to active", slog.Error(err))
@@ -684,7 +684,7 @@ func ActivateDormantUser(logger slog.Logger, auditor *atomic.Pointer[audit.Audit
 // @Produce json
 // @Tags Users
 // @Success 200 {object} codersdk.Response
-// @Router /users/logout [post]
+// @Router /api/v2/users/logout [post]
 func (api *API) postLogout(rw http.ResponseWriter, r *http.Request) {
 	var (
 		ctx               = r.Context()
@@ -705,7 +705,7 @@ func (api *API) postLogout(rw http.ResponseWriter, r *http.Request) {
 		Name:   codersdk.SessionTokenCookie,
 		Path:   "/",
 	}
-	http.SetCookie(rw, cookie)
+	http.SetCookie(rw, api.DeploymentValues.HTTPCookies.Apply(cookie))
 
 	// Delete the session token from database.
 	apiKey := httpmw.APIKey(r)
@@ -770,6 +770,10 @@ type GithubOAuth2Config struct {
 	DefaultProviderConfigured bool
 }
 
+func (*GithubOAuth2Config) PKCESupported() []promoauth.Oauth2PKCEChallengeMethod {
+	return []promoauth.Oauth2PKCEChallengeMethod{promoauth.PKCEChallengeMethodSha256}
+}
+
 func (c *GithubOAuth2Config) Exchange(ctx context.Context, code string, opts ...oauth2.AuthCodeOption) (*oauth2.Token, error) {
 	if !c.DeviceFlowEnabled {
 		return c.OAuth2Config.Exchange(ctx, code, opts...)
@@ -792,7 +796,7 @@ func (c *GithubOAuth2Config) AuthCodeURL(state string, opts ...oauth2.AuthCodeOp
 // @Produce json
 // @Tags Users
 // @Success 200 {object} codersdk.AuthMethods
-// @Router /users/authmethods [get]
+// @Router /api/v2/users/authmethods [get]
 func (api *API) userAuthMethods(rw http.ResponseWriter, r *http.Request) {
 	var signInText string
 	var iconURL string
@@ -827,7 +831,7 @@ func (api *API) userAuthMethods(rw http.ResponseWriter, r *http.Request) {
 // @Produce json
 // @Tags Users
 // @Success 200 {object} codersdk.ExternalAuthDevice
-// @Router /users/oauth2/github/device [get]
+// @Router /api/v2/users/oauth2/github/device [get]
 func (api *API) userOAuth2GithubDevice(rw http.ResponseWriter, r *http.Request) {
 	var (
 		ctx               = r.Context()
@@ -873,7 +877,7 @@ func (api *API) userOAuth2GithubDevice(rw http.ResponseWriter, r *http.Request) 
 // @Security CoderSessionToken
 // @Tags Users
 // @Success 307
-// @Router /users/oauth2/github/callback [get]
+// @Router /api/v2/users/oauth2/github/callback [get]
 func (api *API) userOAuth2Github(rw http.ResponseWriter, r *http.Request) {
 	var (
 		// userOAuth2Github is a system function.
@@ -1172,6 +1176,15 @@ type OIDCConfig struct {
 	IconURL string
 	// SignupsDisabledText is the text do display on the static error page.
 	SignupsDisabledText string
+	PKCEMethods         []promoauth.Oauth2PKCEChallengeMethod
+}
+
+// PKCESupported is to prevent nil pointer dereference.
+func (o *OIDCConfig) PKCESupported() []promoauth.Oauth2PKCEChallengeMethod {
+	if o == nil {
+		return nil
+	}
+	return o.PKCEMethods
 }
 
 // @Summary OpenID Connect Callback
@@ -1179,7 +1192,7 @@ type OIDCConfig struct {
 // @Security CoderSessionToken
 // @Tags Users
 // @Success 307
-// @Router /users/oidc/callback [get]
+// @Router /api/v2/users/oidc/callback [get]
 func (api *API) userOIDC(rw http.ResponseWriter, r *http.Request) {
 	var (
 		// userOIDC is a system function.
@@ -1331,12 +1344,21 @@ func (api *API) userOIDC(rw http.ResponseWriter, r *http.Request) {
 		verified, ok := verifiedRaw.(bool)
 		if ok && !verified {
 			if !api.OIDCConfig.IgnoreEmailVerified {
-				httpapi.Write(ctx, rw, http.StatusForbidden, codersdk.Response{
-					Message: fmt.Sprintf("Verify the %q email address on your OIDC provider to authenticate!", email),
+				site.RenderStaticErrorPage(rw, r, site.ErrorPageData{
+					Status:     http.StatusForbidden,
+					HideStatus: true,
+					Title:      "Email not verified",
+					Description: fmt.Sprintf(
+						"Verify the %q email address on your OIDC provider to authenticate!",
+						email,
+					),
+					Actions: []site.Action{
+						{URL: "/login", Text: "Back to login"},
+					},
 				})
 				return
 			}
-			logger.Warn(ctx, "allowing unverified oidc email %q")
+			logger.Warn(ctx, "allowing unverified oidc email", slog.F("email", email))
 		}
 	}
 
@@ -1358,8 +1380,17 @@ func (api *API) userOIDC(rw http.ResponseWriter, r *http.Request) {
 		ok = false
 		emailSp := strings.Split(email, "@")
 		if len(emailSp) == 1 {
-			httpapi.Write(ctx, rw, http.StatusForbidden, codersdk.Response{
-				Message: fmt.Sprintf("Your email %q is not from an authorized domain! Please contact your administrator.", email),
+			site.RenderStaticErrorPage(rw, r, site.ErrorPageData{
+				Status:     http.StatusForbidden,
+				HideStatus: true,
+				Title:      "Unauthorized email",
+				Description: fmt.Sprintf(
+					"Your email %q is not from an authorized domain! Please contact your administrator.",
+					email,
+				),
+				Actions: []site.Action{
+					{URL: "/login", Text: "Back to login"},
+				},
 			})
 			return
 		}
@@ -1373,8 +1404,17 @@ func (api *API) userOIDC(rw http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if !ok {
-			httpapi.Write(ctx, rw, http.StatusForbidden, codersdk.Response{
-				Message: fmt.Sprintf("Your email %q is not from an authorized domain! Please contact your administrator.", email),
+			site.RenderStaticErrorPage(rw, r, site.ErrorPageData{
+				Status:     http.StatusForbidden,
+				HideStatus: true,
+				Title:      "Unauthorized email",
+				Description: fmt.Sprintf(
+					"Your email %q is not from an authorized domain! Please contact your administrator.",
+					email,
+				),
+				Actions: []site.Action{
+					{URL: "/login", Text: "Back to login"},
+				},
 			})
 			return
 		}
@@ -1394,7 +1434,6 @@ func (api *API) userOIDC(rw http.ResponseWriter, r *http.Request) {
 	if ok {
 		picture, _ = pictureRaw.(string)
 	}
-
 	ctx = slog.With(ctx, slog.F("email", email), slog.F("username", username), slog.F("name", name))
 
 	user, link, err := findLinkedUser(ctx, api.Database, oidcLinkedID(idToken), email)
@@ -1550,7 +1589,7 @@ func claimFields(claims map[string]interface{}) []string {
 	for field := range claims {
 		fields = append(fields, field)
 	}
-	sort.Strings(fields)
+	slices.Sort(fields)
 	return fields
 }
 
@@ -1563,7 +1602,7 @@ func blankFields(claims map[string]interface{}) []string {
 			fields = append(fields, field)
 		}
 	}
-	sort.Strings(fields)
+	slices.Sort(fields)
 	return fields
 }
 
@@ -1711,7 +1750,7 @@ func (api *API) oauthLogin(r *http.Request, params *oauthLoginParams) ([]*http.C
 					validUsername bool
 				)
 				for i := 0; i < 10; i++ {
-					alternate := fmt.Sprintf("%s-%s", original, namesgenerator.GetRandomName(1))
+					alternate := fmt.Sprintf("%s-%s", original, namesgenerator.NameDigitWith("_"))
 
 					params.Username = codersdk.UsernameFrom(alternate)
 
@@ -1786,9 +1825,10 @@ func (api *API) oauthLogin(r *http.Request, params *oauthLoginParams) ([]*http.C
 			dormantConvertAudit.Old = user
 			//nolint:gocritic // System needs to update status of the user account (dormant -> active).
 			user, err = tx.UpdateUserStatus(dbauthz.AsSystemRestricted(ctx), database.UpdateUserStatusParams{
-				ID:        user.ID,
-				Status:    database.UserStatusActive,
-				UpdatedAt: dbtime.Now(),
+				ID:         user.ID,
+				Status:     database.UserStatusActive,
+				UpdatedAt:  dbtime.Now(),
+				UserIsSeen: true,
 			})
 			if err != nil {
 				logger.Error(ctx, "unable to update user status to active", slog.Error(err))

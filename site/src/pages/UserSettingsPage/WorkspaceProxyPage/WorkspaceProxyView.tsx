@@ -1,23 +1,22 @@
-import type { Region } from "api/typesGenerated";
-import { ErrorAlert } from "components/Alert/ErrorAlert";
-import { ChooseOne, Cond } from "components/Conditionals/ChooseOne";
+import type { FC } from "react";
+import type { Region } from "#/api/typesGenerated";
+import { ErrorAlert } from "#/components/Alert/ErrorAlert";
+import { ChooseOne, Cond } from "#/components/Conditionals/ChooseOne";
 import {
 	SettingsHeader,
 	SettingsHeaderDescription,
 	SettingsHeaderTitle,
-} from "components/SettingsHeader/SettingsHeader";
-import { Stack } from "components/Stack/Stack";
+} from "#/components/SettingsHeader/SettingsHeader";
 import {
 	Table,
 	TableBody,
 	TableHead,
 	TableHeader,
 	TableRow,
-} from "components/Table/Table";
-import { TableEmpty } from "components/TableEmpty/TableEmpty";
-import { TableLoader } from "components/TableLoader/TableLoader";
-import type { ProxyLatencyReport } from "contexts/useProxyLatency";
-import type { FC } from "react";
+} from "#/components/Table/Table";
+import { TableEmpty } from "#/components/TableEmpty/TableEmpty";
+import { TableLoader } from "#/components/TableLoader/TableLoader";
+import type { ProxyLatencyReport } from "#/contexts/useProxyLatency";
 import { ProxyRow } from "./WorkspaceProxyRow";
 
 interface WorkspaceProxyViewProps {
@@ -39,7 +38,7 @@ export const WorkspaceProxyView: FC<WorkspaceProxyViewProps> = ({
 	selectProxyError,
 }) => {
 	return (
-		<Stack>
+		<div className="flex flex-col gap-4">
 			<SettingsHeader>
 				<SettingsHeaderTitle>Workspace Proxies</SettingsHeaderTitle>
 				<SettingsHeaderDescription>
@@ -56,9 +55,9 @@ export const WorkspaceProxyView: FC<WorkspaceProxyViewProps> = ({
 			<Table>
 				<TableHeader>
 					<TableRow>
-						<TableHead className="w-[70%]">Proxy</TableHead>
-						<TableHead className="w-[10%] text-right">Status</TableHead>
-						<TableHead className="w-[20%] text-right">Latency</TableHead>
+						<TableHead className="w-[60%]">Proxy</TableHead>
+						<TableHead className="w-[20%]">Status</TableHead>
+						<TableHead className="w-[20%]">Latency</TableHead>
 					</TableRow>
 				</TableHeader>
 				<TableBody>
@@ -81,6 +80,6 @@ export const WorkspaceProxyView: FC<WorkspaceProxyViewProps> = ({
 					</ChooseOne>
 				</TableBody>
 			</Table>
-		</Stack>
+		</div>
 	);
 };

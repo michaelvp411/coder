@@ -10,7 +10,7 @@ curl -X GET http://coder-server:8080/api/v2/derp-map \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /derp-map`
+`GET /api/v2/derp-map`
 
 ### Responses
 
@@ -30,7 +30,7 @@ curl -X GET http://coder-server:8080/api/v2/tailnet \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /tailnet`
+`GET /api/v2/tailnet`
 
 ### Responses
 
@@ -52,12 +52,13 @@ curl -X POST http://coder-server:8080/api/v2/workspaceagents/aws-instance-identi
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`POST /workspaceagents/aws-instance-identity`
+`POST /api/v2/workspaceagents/aws-instance-identity`
 
 > Body parameter
 
 ```json
 {
+  "agent_name": "string",
   "document": "string",
   "signature": "string"
 }
@@ -65,9 +66,9 @@ curl -X POST http://coder-server:8080/api/v2/workspaceagents/aws-instance-identi
 
 ### Parameters
 
-| Name   | In   | Type                                                                             | Required | Description             |
-|--------|------|----------------------------------------------------------------------------------|----------|-------------------------|
-| `body` | body | [agentsdk.AWSInstanceIdentityToken](schemas.md#agentsdkawsinstanceidentitytoken) | true     | Instance identity token |
+| Name   | In   | Type                                                                             | Required | Description                                                                                                           |
+|--------|------|----------------------------------------------------------------------------------|----------|-----------------------------------------------------------------------------------------------------------------------|
+| `body` | body | [agentsdk.AWSInstanceIdentityToken](schemas.md#agentsdkawsinstanceidentitytoken) | true     | Instance identity token. The optional agent_name field disambiguates when multiple agents share the same instance ID. |
 
 ### Example responses
 
@@ -99,12 +100,13 @@ curl -X POST http://coder-server:8080/api/v2/workspaceagents/azure-instance-iden
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`POST /workspaceagents/azure-instance-identity`
+`POST /api/v2/workspaceagents/azure-instance-identity`
 
 > Body parameter
 
 ```json
 {
+  "agent_name": "string",
   "encoding": "string",
   "signature": "string"
 }
@@ -112,9 +114,9 @@ curl -X POST http://coder-server:8080/api/v2/workspaceagents/azure-instance-iden
 
 ### Parameters
 
-| Name   | In   | Type                                                                                 | Required | Description             |
-|--------|------|--------------------------------------------------------------------------------------|----------|-------------------------|
-| `body` | body | [agentsdk.AzureInstanceIdentityToken](schemas.md#agentsdkazureinstanceidentitytoken) | true     | Instance identity token |
+| Name   | In   | Type                                                                                 | Required | Description                                                                                                           |
+|--------|------|--------------------------------------------------------------------------------------|----------|-----------------------------------------------------------------------------------------------------------------------|
+| `body` | body | [agentsdk.AzureInstanceIdentityToken](schemas.md#agentsdkazureinstanceidentitytoken) | true     | Instance identity token. The optional agent_name field disambiguates when multiple agents share the same instance ID. |
 
 ### Example responses
 
@@ -146,21 +148,22 @@ curl -X POST http://coder-server:8080/api/v2/workspaceagents/google-instance-ide
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`POST /workspaceagents/google-instance-identity`
+`POST /api/v2/workspaceagents/google-instance-identity`
 
 > Body parameter
 
 ```json
 {
+  "agent_name": "string",
   "json_web_token": "string"
 }
 ```
 
 ### Parameters
 
-| Name   | In   | Type                                                                                   | Required | Description             |
-|--------|------|----------------------------------------------------------------------------------------|----------|-------------------------|
-| `body` | body | [agentsdk.GoogleInstanceIdentityToken](schemas.md#agentsdkgoogleinstanceidentitytoken) | true     | Instance identity token |
+| Name   | In   | Type                                                                                   | Required | Description                                                                                                           |
+|--------|------|----------------------------------------------------------------------------------------|----------|-----------------------------------------------------------------------------------------------------------------------|
+| `body` | body | [agentsdk.GoogleInstanceIdentityToken](schemas.md#agentsdkgoogleinstanceidentitytoken) | true     | Instance identity token. The optional agent_name field disambiguates when multiple agents share the same instance ID. |
 
 ### Example responses
 
@@ -192,7 +195,7 @@ curl -X PATCH http://coder-server:8080/api/v2/workspaceagents/me/app-status \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`PATCH /workspaceagents/me/app-status`
+`PATCH /api/v2/workspaceagents/me/app-status`
 
 > Body parameter
 
@@ -249,7 +252,7 @@ curl -X GET http://coder-server:8080/api/v2/workspaceagents/me/external-auth?mat
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /workspaceagents/me/external-auth`
+`GET /api/v2/workspaceagents/me/external-auth`
 
 ### Parameters
 
@@ -293,7 +296,7 @@ curl -X GET http://coder-server:8080/api/v2/workspaceagents/me/gitauth?match=str
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /workspaceagents/me/gitauth`
+`GET /api/v2/workspaceagents/me/gitauth`
 
 ### Parameters
 
@@ -337,7 +340,7 @@ curl -X GET http://coder-server:8080/api/v2/workspaceagents/me/gitsshkey \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /workspaceagents/me/gitsshkey`
+`GET /api/v2/workspaceagents/me/gitsshkey`
 
 ### Example responses
 
@@ -370,7 +373,7 @@ curl -X POST http://coder-server:8080/api/v2/workspaceagents/me/log-source \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`POST /workspaceagents/me/log-source`
+`POST /api/v2/workspaceagents/me/log-source`
 
 > Body parameter
 
@@ -422,7 +425,7 @@ curl -X PATCH http://coder-server:8080/api/v2/workspaceagents/me/logs \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`PATCH /workspaceagents/me/logs`
+`PATCH /api/v2/workspaceagents/me/logs`
 
 > Body parameter
 
@@ -481,7 +484,13 @@ curl -X GET http://coder-server:8080/api/v2/workspaceagents/me/reinit \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /workspaceagents/me/reinit`
+`GET /api/v2/workspaceagents/me/reinit`
+
+### Parameters
+
+| Name   | In    | Type    | Required | Description                     |
+|--------|-------|---------|----------|---------------------------------|
+| `wait` | query | boolean | false    | Opt in to durable reinit checks |
 
 ### Example responses
 
@@ -489,16 +498,18 @@ curl -X GET http://coder-server:8080/api/v2/workspaceagents/me/reinit \
 
 ```json
 {
+  "owner_id": "8826ee2e-7933-4665-aef2-2393f84a0d05",
   "reason": "prebuild_claimed",
-  "workspaceID": "string"
+  "workspace_id": "0967198e-ec7b-4c6b-b4d3-f71244cadbe9"
 }
 ```
 
 ### Responses
 
-| Status | Meaning                                                 | Description | Schema                                                                     |
-|--------|---------------------------------------------------------|-------------|----------------------------------------------------------------------------|
-| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [agentsdk.ReinitializationEvent](schemas.md#agentsdkreinitializationevent) |
+| Status | Meaning                                                       | Description | Schema                                                                     |
+|--------|---------------------------------------------------------------|-------------|----------------------------------------------------------------------------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1)       | OK          | [agentsdk.ReinitializationEvent](schemas.md#agentsdkreinitializationevent) |
+| 409    | [Conflict](https://tools.ietf.org/html/rfc7231#section-6.5.8) | Conflict    | [codersdk.Response](schemas.md#codersdkresponse)                           |
 
 To perform this operation, you must be authenticated. [Learn more](authentication.md).
 
@@ -513,7 +524,7 @@ curl -X GET http://coder-server:8080/api/v2/workspaceagents/{workspaceagent} \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /workspaceagents/{workspaceagent}`
+`GET /api/v2/workspaceagents/{workspaceagent}`
 
 ### Parameters
 
@@ -621,6 +632,7 @@ curl -X GET http://coder-server:8080/api/v2/workspaceagents/{workspaceagent} \
     {
       "cron": "string",
       "display_name": "string",
+      "exit_code": 0,
       "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
       "log_path": "string",
       "log_source_id": "4197ab25-95cf-4b91-9c78-f7f2af5d353a",
@@ -628,6 +640,7 @@ curl -X GET http://coder-server:8080/api/v2/workspaceagents/{workspaceagent} \
       "run_on_stop": true,
       "script": "string",
       "start_blocks_login": true,
+      "status": "ok",
       "timeout": 0
     }
   ],
@@ -662,7 +675,7 @@ curl -X GET http://coder-server:8080/api/v2/workspaceagents/{workspaceagent}/con
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /workspaceagents/{workspaceagent}/connection`
+`GET /api/v2/workspaceagents/{workspaceagent}/connection`
 
 ### Parameters
 
@@ -760,7 +773,7 @@ curl -X GET http://coder-server:8080/api/v2/workspaceagents/{workspaceagent}/con
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /workspaceagents/{workspaceagent}/containers`
+`GET /api/v2/workspaceagents/{workspaceagent}/containers`
 
 ### Parameters
 
@@ -838,6 +851,10 @@ curl -X GET http://coder-server:8080/api/v2/workspaceagents/{workspaceagent}/con
       "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
       "name": "string",
       "status": "running",
+      "subagent_id": {
+        "uuid": "string",
+        "valid": true
+      },
       "workspace_folder": "string"
     }
   ],
@@ -855,6 +872,33 @@ curl -X GET http://coder-server:8080/api/v2/workspaceagents/{workspaceagent}/con
 
 To perform this operation, you must be authenticated. [Learn more](authentication.md).
 
+## Delete devcontainer for workspace agent
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X DELETE http://coder-server:8080/api/v2/workspaceagents/{workspaceagent}/containers/devcontainers/{devcontainer} \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`DELETE /api/v2/workspaceagents/{workspaceagent}/containers/devcontainers/{devcontainer}`
+
+### Parameters
+
+| Name             | In   | Type         | Required | Description        |
+|------------------|------|--------------|----------|--------------------|
+| `workspaceagent` | path | string(uuid) | true     | Workspace agent ID |
+| `devcontainer`   | path | string       | true     | Devcontainer ID    |
+
+### Responses
+
+| Status | Meaning                                                         | Description | Schema |
+|--------|-----------------------------------------------------------------|-------------|--------|
+| 204    | [No Content](https://tools.ietf.org/html/rfc7231#section-6.3.5) | No Content  |        |
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
 ## Recreate devcontainer for workspace agent
 
 ### Code samples
@@ -866,7 +910,7 @@ curl -X POST http://coder-server:8080/api/v2/workspaceagents/{workspaceagent}/co
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`POST /workspaceagents/{workspaceagent}/containers/devcontainers/{devcontainer}/recreate`
+`POST /api/v2/workspaceagents/{workspaceagent}/containers/devcontainers/{devcontainer}/recreate`
 
 ### Parameters
 
@@ -911,7 +955,7 @@ curl -X GET http://coder-server:8080/api/v2/workspaceagents/{workspaceagent}/con
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /workspaceagents/{workspaceagent}/containers/watch`
+`GET /api/v2/workspaceagents/{workspaceagent}/containers/watch`
 
 ### Parameters
 
@@ -988,6 +1032,10 @@ curl -X GET http://coder-server:8080/api/v2/workspaceagents/{workspaceagent}/con
       "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
       "name": "string",
       "status": "running",
+      "subagent_id": {
+        "uuid": "string",
+        "valid": true
+      },
       "workspace_folder": "string"
     }
   ],
@@ -1015,7 +1063,7 @@ curl -X GET http://coder-server:8080/api/v2/workspaceagents/{workspaceagent}/coo
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /workspaceagents/{workspaceagent}/coordinate`
+`GET /api/v2/workspaceagents/{workspaceagent}/coordinate`
 
 ### Parameters
 
@@ -1042,7 +1090,7 @@ curl -X GET http://coder-server:8080/api/v2/workspaceagents/{workspaceagent}/lis
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /workspaceagents/{workspaceagent}/listening-ports`
+`GET /api/v2/workspaceagents/{workspaceagent}/listening-ports`
 
 ### Parameters
 
@@ -1085,17 +1133,24 @@ curl -X GET http://coder-server:8080/api/v2/workspaceagents/{workspaceagent}/log
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /workspaceagents/{workspaceagent}/logs`
+`GET /api/v2/workspaceagents/{workspaceagent}/logs`
 
 ### Parameters
 
-| Name             | In    | Type         | Required | Description                                  |
-|------------------|-------|--------------|----------|----------------------------------------------|
-| `workspaceagent` | path  | string(uuid) | true     | Workspace agent ID                           |
-| `before`         | query | integer      | false    | Before log id                                |
-| `after`          | query | integer      | false    | After log id                                 |
-| `follow`         | query | boolean      | false    | Follow log stream                            |
-| `no_compression` | query | boolean      | false    | Disable compression for WebSocket connection |
+| Name             | In    | Type         | Required | Description                                                                                                                                 |
+|------------------|-------|--------------|----------|---------------------------------------------------------------------------------------------------------------------------------------------|
+| `workspaceagent` | path  | string(uuid) | true     | Workspace agent ID                                                                                                                          |
+| `before`         | query | integer      | false    | Before log id                                                                                                                               |
+| `after`          | query | integer      | false    | After log id                                                                                                                                |
+| `follow`         | query | boolean      | false    | Follow log stream                                                                                                                           |
+| `no_compression` | query | boolean      | false    | Disable compression for WebSocket connection                                                                                                |
+| `format`         | query | string       | false    | Log output format. Accepted: 'json' (default), 'text' (plain text with RFC3339 timestamps and ANSI colors). Not supported with follow=true. |
+
+#### Enumerated Values
+
+| Parameter | Value(s)       |
+|-----------|----------------|
+| `format`  | `json`, `text` |
 
 ### Example responses
 
@@ -1134,13 +1189,9 @@ Status Code **200**
 
 #### Enumerated Values
 
-| Property | Value   |
-|----------|---------|
-| `level`  | `trace` |
-| `level`  | `debug` |
-| `level`  | `info`  |
-| `level`  | `warn`  |
-| `level`  | `error` |
+| Property | Value(s)                                  |
+|----------|-------------------------------------------|
+| `level`  | `debug`, `error`, `info`, `trace`, `warn` |
 
 To perform this operation, you must be authenticated. [Learn more](authentication.md).
 
@@ -1154,7 +1205,7 @@ curl -X GET http://coder-server:8080/api/v2/workspaceagents/{workspaceagent}/pty
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /workspaceagents/{workspaceagent}/pty`
+`GET /api/v2/workspaceagents/{workspaceagent}/pty`
 
 ### Parameters
 
@@ -1181,7 +1232,7 @@ curl -X GET http://coder-server:8080/api/v2/workspaceagents/{workspaceagent}/sta
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /workspaceagents/{workspaceagent}/startup-logs`
+`GET /api/v2/workspaceagents/{workspaceagent}/startup-logs`
 
 ### Parameters
 
@@ -1230,12 +1281,8 @@ Status Code **200**
 
 #### Enumerated Values
 
-| Property | Value   |
-|----------|---------|
-| `level`  | `trace` |
-| `level`  | `debug` |
-| `level`  | `info`  |
-| `level`  | `warn`  |
-| `level`  | `error` |
+| Property | Value(s)                                  |
+|----------|-------------------------------------------|
+| `level`  | `debug`, `error`, `info`, `trace`, `warn` |
 
 To perform this operation, you must be authenticated. [Learn more](authentication.md).

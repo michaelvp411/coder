@@ -16,6 +16,7 @@ import (
 	"github.com/coder/coder/v2/coderd/externalauth"
 	"github.com/coder/coder/v2/coderd/httpapi"
 	"github.com/coder/coder/v2/coderd/httpmw"
+	"github.com/coder/coder/v2/coderd/util/slice"
 	"github.com/coder/coder/v2/codersdk"
 )
 
@@ -26,7 +27,7 @@ import (
 // @Produce json
 // @Param externalauth path string true "Git Provider ID" format(string)
 // @Success 200 {object} codersdk.ExternalAuth
-// @Router /external-auth/{externalauth} [get]
+// @Router /api/v2/external-auth/{externalauth} [get]
 func (api *API) externalAuthByID(w http.ResponseWriter, r *http.Request) {
 	config := httpmw.ExternalAuthParam(r)
 	apiKey := httpmw.APIKey(r)
@@ -88,7 +89,7 @@ func (api *API) externalAuthByID(w http.ResponseWriter, r *http.Request) {
 // @Produce json
 // @Param externalauth path string true "Git Provider ID" format(string)
 // @Success 200 {object} codersdk.DeleteExternalAuthByIDResponse
-// @Router /external-auth/{externalauth} [delete]
+// @Router /api/v2/external-auth/{externalauth} [delete]
 func (api *API) deleteExternalAuthByID(w http.ResponseWriter, r *http.Request) {
 	config := httpmw.ExternalAuthParam(r)
 	apiKey := httpmw.APIKey(r)
@@ -141,7 +142,7 @@ func (api *API) deleteExternalAuthByID(w http.ResponseWriter, r *http.Request) {
 // @Tags Git
 // @Param externalauth path string true "External Provider ID" format(string)
 // @Success 204
-// @Router /external-auth/{externalauth}/device [post]
+// @Router /api/v2/external-auth/{externalauth}/device [post]
 func (api *API) postExternalAuthDeviceByID(rw http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	apiKey := httpmw.APIKey(r)
@@ -231,7 +232,7 @@ func (api *API) postExternalAuthDeviceByID(rw http.ResponseWriter, r *http.Reque
 // @Tags Git
 // @Param externalauth path string true "Git Provider ID" format(string)
 // @Success 200 {object} codersdk.ExternalAuthDevice
-// @Router /external-auth/{externalauth}/device [get]
+// @Router /api/v2/external-auth/{externalauth}/device [get]
 func (*API) externalAuthDeviceByID(rw http.ResponseWriter, r *http.Request) {
 	config := httpmw.ExternalAuthParam(r)
 	ctx := r.Context()
@@ -344,7 +345,7 @@ func (api *API) externalAuthCallback(externalAuthConfig *externalauth.Config) ht
 // @Produce json
 // @Tags Git
 // @Success 200 {object} codersdk.ExternalAuthLink
-// @Router /external-auth [get]
+// @Router /api/v2/external-auth [get]
 func (api *API) listUserExternalAuths(rw http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	key := httpmw.APIKey(r)
@@ -417,14 +418,15 @@ func ExternalAuthConfigs(auths []*externalauth.Config) []codersdk.ExternalAuthLi
 
 func ExternalAuthConfig(cfg *externalauth.Config) codersdk.ExternalAuthLinkProvider {
 	return codersdk.ExternalAuthLinkProvider{
-		ID:                 cfg.ID,
-		Type:               cfg.Type,
-		Device:             cfg.DeviceAuth != nil,
-		DisplayName:        cfg.DisplayName,
-		DisplayIcon:        cfg.DisplayIcon,
-		AllowRefresh:       !cfg.NoRefresh,
-		AllowValidate:      cfg.ValidateURL != "",
-		SupportsRevocation: cfg.RevokeURL != "",
+		ID:                            cfg.ID,
+		Type:                          cfg.Type,
+		Device:                        cfg.DeviceAuth != nil,
+		DisplayName:                   cfg.DisplayName,
+		DisplayIcon:                   cfg.DisplayIcon,
+		AllowRefresh:                  !cfg.NoRefresh,
+		AllowValidate:                 cfg.ValidateURL != "",
+		SupportsRevocation:            cfg.RevokeURL != "",
+		CodeChallengeMethodsSupported: slice.ToStrings(cfg.CodeChallengeMethodsSupported),
 	}
 }
 

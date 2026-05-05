@@ -2,8 +2,13 @@ import type { Interpolation, Theme } from "@emotion/react";
 import Checkbox from "@mui/material/Checkbox";
 import FormControlLabel from "@mui/material/FormControlLabel";
 import TextField from "@mui/material/TextField";
-import { isApiValidationError } from "api/errors";
-import { RBACResourceActions } from "api/rbacresourcesGenerated";
+import { useFormik } from "formik";
+import { EyeIcon, EyeOffIcon } from "lucide-react";
+import { type ChangeEvent, type FC, useState } from "react";
+import { useNavigate } from "react-router";
+import * as Yup from "yup";
+import { isApiValidationError } from "#/api/errors";
+import { RBACResourceActions } from "#/api/rbacresourcesGenerated";
 import type {
 	AssignableRoles,
 	CustomRoleRequest,
@@ -11,17 +16,16 @@ import type {
 	RBACAction,
 	RBACResource,
 	Role,
-} from "api/typesGenerated";
-import { ErrorAlert } from "components/Alert/ErrorAlert";
-import { Button } from "components/Button/Button";
-import { FormFields, FormFooter, VerticalForm } from "components/Form/Form";
+} from "#/api/typesGenerated";
+import { ErrorAlert } from "#/components/Alert/ErrorAlert";
+import { Button } from "#/components/Button/Button";
+import { FormFields, FormFooter, VerticalForm } from "#/components/Form/Form";
 import {
 	SettingsHeader,
 	SettingsHeaderDescription,
 	SettingsHeaderTitle,
-} from "components/SettingsHeader/SettingsHeader";
-import { Spinner } from "components/Spinner/Spinner";
-import { Stack } from "components/Stack/Stack";
+} from "#/components/SettingsHeader/SettingsHeader";
+import { Spinner } from "#/components/Spinner/Spinner";
 import {
 	Table,
 	TableBody,
@@ -30,13 +34,8 @@ import {
 	TableHead,
 	TableHeader,
 	TableRow,
-} from "components/Table/Table";
-import { useFormik } from "formik";
-import { EyeIcon, EyeOffIcon } from "lucide-react";
-import { type ChangeEvent, type FC, useState } from "react";
-import { useNavigate } from "react-router";
-import { getFormHelpers, nameValidator } from "utils/formUtils";
-import * as Yup from "yup";
+} from "#/components/Table/Table";
+import { getFormHelpers, nameValidator } from "#/utils/formUtils";
 
 const validationSchema = Yup.object({
 	name: nameValidator("Name"),
@@ -66,9 +65,11 @@ const CreateEditRolePageView: FC<CreateEditRolePageViewProps> = ({
 		initialValues: {
 			name: role?.name || "",
 			display_name: role?.display_name || "",
-			site_permissions: role?.site_permissions || [],
-			organization_permissions: role?.organization_permissions || [],
-			user_permissions: role?.user_permissions || [],
+			site_permissions: role?.site_permissions ?? [],
+			user_permissions: role?.user_permissions ?? [],
+			organization_permissions: role?.organization_permissions ?? [],
+			organization_member_permissions:
+				role?.organization_member_permissions ?? [],
 		},
 		validationSchema,
 		onSubmit,
@@ -78,11 +79,7 @@ const CreateEditRolePageView: FC<CreateEditRolePageViewProps> = ({
 
 	return (
 		<>
-			<Stack
-				alignItems="baseline"
-				direction="row"
-				justifyContent="space-between"
-			>
+			<div className="flex flex-row gap-4 items-baseline justify-between">
 				<SettingsHeader>
 					<SettingsHeaderTitle>
 						{role ? "Edit" : "Create"} Custom Role
@@ -110,7 +107,7 @@ const CreateEditRolePageView: FC<CreateEditRolePageViewProps> = ({
 						{role !== undefined ? "Save" : "Create Role"}
 					</Button>
 				</div>
-			</Stack>
+			</div>
 
 			<VerticalForm onSubmit={form.handleSubmit}>
 				<FormFields>

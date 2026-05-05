@@ -1,6 +1,5 @@
-import { displayError } from "components/GlobalSnackbar/utils";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useEffectEvent } from "./hookPolyfills";
+import { toast } from "sonner";
 
 const CLIPBOARD_TIMEOUT_MS = 1_000;
 export const COPY_FAILED_MESSAGE = "Failed to copy text to clipboard";
@@ -36,41 +35,38 @@ export type UseClipboardResult = Readonly<{
 	showCopiedSuccess: boolean;
 }>;
 
-export const useClipboard = (input?: UseClipboardInput): UseClipboardResult => {
-	const { onError = displayError, clearErrorOnSuccess = true } = input ?? {};
+export const useClipboard = (
+	input: UseClipboardInput = {},
+): UseClipboardResult => {
+	const { onError = toast.error, clearErrorOnSuccess = true } = input;
 
 	const [showCopiedSuccess, setShowCopiedSuccess] = useState(false);
 	const [error, setError] = useState<Error>();
 	const timeoutIdRef = useRef<number | undefined>(undefined);
 
 	useEffect(() => {
-		const clearTimeoutOnUnmount = () => {
-			window.clearTimeout(timeoutIdRef.current);
-		};
-		return clearTimeoutOnUnmount;
+		return () => window.clearTimeout(timeoutIdRef.current);
 	}, []);
-
-	const stableOnError = useEffectEvent(() => onError(COPY_FAILED_MESSAGE));
-	const handleSuccessfulCopy = useEffectEvent(() => {
-		setShowCopiedSuccess(true);
-		if (clearErrorOnSuccess) {
-			setError(undefined);
-		}
-
-		timeoutIdRef.current = window.setTimeout(() => {
-			setShowCopiedSuccess(false);
-		}, CLIPBOARD_TIMEOUT_MS);
-	});
 
 	const copyToClipboard = useCallback(
 		async (textToCopy: string) => {
+			const markSuccess = () => {
+				setShowCopiedSuccess(true);
+				if (clearErrorOnSuccess) {
+					setError(undefined);
+				}
+				timeoutIdRef.current = window.setTimeout(() => {
+					setShowCopiedSuccess(false);
+				}, CLIPBOARD_TIMEOUT_MS);
+			};
+
 			try {
-				await window.navigator.clipboard.writeText(textToCopy);
-				handleSuccessfulCopy();
+				await navigator.clipboard.writeText(textToCopy);
+				markSuccess();
 			} catch (err) {
 				const fallbackCopySuccessful = simulateClipboardWrite(textToCopy);
 				if (fallbackCopySuccessful) {
-					handleSuccessfulCopy();
+					markSuccess();
 					return;
 				}
 
@@ -81,10 +77,10 @@ export const useClipboard = (input?: UseClipboardInput): UseClipboardResult => {
 
 				console.error(wrappedErr);
 				setError(wrappedErr);
-				stableOnError();
+				onError(COPY_FAILED_MESSAGE);
 			}
 		},
-		[stableOnError, handleSuccessfulCopy],
+		[onError, clearErrorOnSuccess],
 	);
 
 	return { showCopiedSuccess, error, copyToClipboard };

@@ -12,7 +12,7 @@ curl -X POST http://coder-server:8080/api/v2/organizations/{organization}/member
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`POST /organizations/{organization}/members/{user}/workspaces`
+`POST /api/v2/organizations/{organization}/members/{user}/workspaces`
 
 Create a new workspace using a template. The request must
 specify either the Template ID or the Template Version ID,
@@ -82,7 +82,6 @@ of the template will be used.
     "workspace_id": "0967198e-ec7b-4c6b-b4d3-f71244cadbe9"
   },
   "latest_build": {
-    "ai_task_sidebar_app_id": "852ddafb-2cb9-4cbf-8a8c-075389fb3d3d",
     "build_number": 0,
     "created_at": "2019-08-24T14:15:22Z",
     "daily_cost": 0,
@@ -116,6 +115,7 @@ of the template will be used.
         "template_id": "c6d67e98-83ea-49f0-8812-e4abae2b68bc",
         "template_name": "string",
         "template_version_name": "string",
+        "workspace_build_transition": "start",
         "workspace_id": "0967198e-ec7b-4c6b-b4d3-f71244cadbe9",
         "workspace_name": "string"
       },
@@ -237,6 +237,7 @@ of the template will be used.
               {
                 "cron": "string",
                 "display_name": "string",
+                "exit_code": 0,
                 "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
                 "log_path": "string",
                 "log_source_id": "4197ab25-95cf-4b91-9c78-f7f2af5d353a",
@@ -244,6 +245,7 @@ of the template will be used.
                 "run_on_stop": true,
                 "script": "string",
                 "start_blocks_login": true,
+                "status": "ok",
                 "timeout": 0
               }
             ],
@@ -277,7 +279,6 @@ of the template will be used.
       }
     ],
     "status": "pending",
-    "task_app_id": "ca438251-3e16-4fae-b9ab-dd3c237c3735",
     "template_version_id": "0ba39c92-1f1b-4c32-aa3e-9925d7713eb1",
     "template_version_name": "string",
     "template_version_preset_id": "512a53a7-30da-446e-a1fc-713c630baff1",
@@ -297,6 +298,21 @@ of the template will be used.
   "owner_avatar_url": "string",
   "owner_id": "8826ee2e-7933-4665-aef2-2393f84a0d05",
   "owner_name": "string",
+  "shared_with": [
+    {
+      "actor_type": "group",
+      "avatar_url": "http://example.com",
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "name": "string",
+      "roles": [
+        "admin"
+      ]
+    }
+  ],
+  "task_id": {
+    "uuid": "string",
+    "valid": true
+  },
   "template_active_version_id": "b0da9c29-67d8-4c87-888c-bafe356f7f3c",
   "template_allow_user_cancel_workspace_jobs": true,
   "template_display_name": "string",
@@ -318,6 +334,64 @@ of the template will be used.
 
 To perform this operation, you must be authenticated. [Learn more](authentication.md).
 
+## Get users available for workspace creation
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X GET http://coder-server:8080/api/v2/organizations/{organization}/members/{user}/workspaces/available-users \
+  -H 'Accept: application/json' \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`GET /api/v2/organizations/{organization}/members/{user}/workspaces/available-users`
+
+### Parameters
+
+| Name           | In    | Type         | Required | Description           |
+|----------------|-------|--------------|----------|-----------------------|
+| `organization` | path  | string(uuid) | true     | Organization ID       |
+| `user`         | path  | string       | true     | User ID, name, or me  |
+| `q`            | query | string       | false    | Search query          |
+| `limit`        | query | integer      | false    | Limit results         |
+| `offset`       | query | integer      | false    | Offset for pagination |
+
+### Example responses
+
+> 200 Response
+
+```json
+[
+  {
+    "avatar_url": "http://example.com",
+    "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+    "name": "string",
+    "username": "string"
+  }
+]
+```
+
+### Responses
+
+| Status | Meaning                                                 | Description | Schema                                                          |
+|--------|---------------------------------------------------------|-------------|-----------------------------------------------------------------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | array of [codersdk.MinimalUser](schemas.md#codersdkminimaluser) |
+
+<h3 id="get-users-available-for-workspace-creation-responseschema">Response Schema</h3>
+
+Status Code **200**
+
+| Name           | Type         | Required | Restrictions | Description |
+|----------------|--------------|----------|--------------|-------------|
+| `[array item]` | array        | false    |              |             |
+| `» avatar_url` | string(uri)  | false    |              |             |
+| `» id`         | string(uuid) | true     |              |             |
+| `» name`       | string       | false    |              |             |
+| `» username`   | string       | true     |              |             |
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
 ## Get workspace metadata by user and workspace name
 
 ### Code samples
@@ -329,7 +403,7 @@ curl -X GET http://coder-server:8080/api/v2/users/{user}/workspace/{workspacenam
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /users/{user}/workspace/{workspacename}`
+`GET /api/v2/users/{user}/workspace/{workspacename}`
 
 ### Parameters
 
@@ -374,7 +448,6 @@ curl -X GET http://coder-server:8080/api/v2/users/{user}/workspace/{workspacenam
     "workspace_id": "0967198e-ec7b-4c6b-b4d3-f71244cadbe9"
   },
   "latest_build": {
-    "ai_task_sidebar_app_id": "852ddafb-2cb9-4cbf-8a8c-075389fb3d3d",
     "build_number": 0,
     "created_at": "2019-08-24T14:15:22Z",
     "daily_cost": 0,
@@ -408,6 +481,7 @@ curl -X GET http://coder-server:8080/api/v2/users/{user}/workspace/{workspacenam
         "template_id": "c6d67e98-83ea-49f0-8812-e4abae2b68bc",
         "template_name": "string",
         "template_version_name": "string",
+        "workspace_build_transition": "start",
         "workspace_id": "0967198e-ec7b-4c6b-b4d3-f71244cadbe9",
         "workspace_name": "string"
       },
@@ -529,6 +603,7 @@ curl -X GET http://coder-server:8080/api/v2/users/{user}/workspace/{workspacenam
               {
                 "cron": "string",
                 "display_name": "string",
+                "exit_code": 0,
                 "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
                 "log_path": "string",
                 "log_source_id": "4197ab25-95cf-4b91-9c78-f7f2af5d353a",
@@ -536,6 +611,7 @@ curl -X GET http://coder-server:8080/api/v2/users/{user}/workspace/{workspacenam
                 "run_on_stop": true,
                 "script": "string",
                 "start_blocks_login": true,
+                "status": "ok",
                 "timeout": 0
               }
             ],
@@ -569,7 +645,6 @@ curl -X GET http://coder-server:8080/api/v2/users/{user}/workspace/{workspacenam
       }
     ],
     "status": "pending",
-    "task_app_id": "ca438251-3e16-4fae-b9ab-dd3c237c3735",
     "template_version_id": "0ba39c92-1f1b-4c32-aa3e-9925d7713eb1",
     "template_version_name": "string",
     "template_version_preset_id": "512a53a7-30da-446e-a1fc-713c630baff1",
@@ -589,6 +664,21 @@ curl -X GET http://coder-server:8080/api/v2/users/{user}/workspace/{workspacenam
   "owner_avatar_url": "string",
   "owner_id": "8826ee2e-7933-4665-aef2-2393f84a0d05",
   "owner_name": "string",
+  "shared_with": [
+    {
+      "actor_type": "group",
+      "avatar_url": "http://example.com",
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "name": "string",
+      "roles": [
+        "admin"
+      ]
+    }
+  ],
+  "task_id": {
+    "uuid": "string",
+    "valid": true
+  },
   "template_active_version_id": "b0da9c29-67d8-4c87-888c-bafe356f7f3c",
   "template_allow_user_cancel_workspace_jobs": true,
   "template_display_name": "string",
@@ -622,7 +712,7 @@ curl -X POST http://coder-server:8080/api/v2/users/{user}/workspaces \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`POST /users/{user}/workspaces`
+`POST /api/v2/users/{user}/workspaces`
 
 Create a new workspace using a template. The request must
 specify either the Template ID or the Template Version ID,
@@ -691,7 +781,6 @@ of the template will be used.
     "workspace_id": "0967198e-ec7b-4c6b-b4d3-f71244cadbe9"
   },
   "latest_build": {
-    "ai_task_sidebar_app_id": "852ddafb-2cb9-4cbf-8a8c-075389fb3d3d",
     "build_number": 0,
     "created_at": "2019-08-24T14:15:22Z",
     "daily_cost": 0,
@@ -725,6 +814,7 @@ of the template will be used.
         "template_id": "c6d67e98-83ea-49f0-8812-e4abae2b68bc",
         "template_name": "string",
         "template_version_name": "string",
+        "workspace_build_transition": "start",
         "workspace_id": "0967198e-ec7b-4c6b-b4d3-f71244cadbe9",
         "workspace_name": "string"
       },
@@ -846,6 +936,7 @@ of the template will be used.
               {
                 "cron": "string",
                 "display_name": "string",
+                "exit_code": 0,
                 "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
                 "log_path": "string",
                 "log_source_id": "4197ab25-95cf-4b91-9c78-f7f2af5d353a",
@@ -853,6 +944,7 @@ of the template will be used.
                 "run_on_stop": true,
                 "script": "string",
                 "start_blocks_login": true,
+                "status": "ok",
                 "timeout": 0
               }
             ],
@@ -886,7 +978,6 @@ of the template will be used.
       }
     ],
     "status": "pending",
-    "task_app_id": "ca438251-3e16-4fae-b9ab-dd3c237c3735",
     "template_version_id": "0ba39c92-1f1b-4c32-aa3e-9925d7713eb1",
     "template_version_name": "string",
     "template_version_preset_id": "512a53a7-30da-446e-a1fc-713c630baff1",
@@ -906,6 +997,21 @@ of the template will be used.
   "owner_avatar_url": "string",
   "owner_id": "8826ee2e-7933-4665-aef2-2393f84a0d05",
   "owner_name": "string",
+  "shared_with": [
+    {
+      "actor_type": "group",
+      "avatar_url": "http://example.com",
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "name": "string",
+      "roles": [
+        "admin"
+      ]
+    }
+  ],
+  "task_id": {
+    "uuid": "string",
+    "valid": true
+  },
   "template_active_version_id": "b0da9c29-67d8-4c87-888c-bafe356f7f3c",
   "template_allow_user_cancel_workspace_jobs": true,
   "template_display_name": "string",
@@ -938,15 +1044,15 @@ curl -X GET http://coder-server:8080/api/v2/workspaces \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /workspaces`
+`GET /api/v2/workspaces`
 
 ### Parameters
 
-| Name     | In    | Type    | Required | Description                                                                                                                                                                        |
-|----------|-------|---------|----------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `q`      | query | string  | false    | Search query in the format `key:value`. Available keys are: owner, template, name, status, has-agent, dormant, last_used_after, last_used_before, has-ai-task, has_external_agent. |
-| `limit`  | query | integer | false    | Page limit                                                                                                                                                                         |
-| `offset` | query | integer | false    | Page offset                                                                                                                                                                        |
+| Name     | In    | Type    | Required | Description                                                                                                                                                                                 |
+|----------|-------|---------|----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `q`      | query | string  | false    | Search query in the format `key:value`. Available keys are: owner, template, name, status, has-agent, dormant, last_used_after, last_used_before, has-ai-task, has_external_agent, healthy. |
+| `limit`  | query | integer | false    | Page limit                                                                                                                                                                                  |
+| `offset` | query | integer | false    | Page offset                                                                                                                                                                                 |
 
 ### Example responses
 
@@ -986,7 +1092,6 @@ curl -X GET http://coder-server:8080/api/v2/workspaces \
         "workspace_id": "0967198e-ec7b-4c6b-b4d3-f71244cadbe9"
       },
       "latest_build": {
-        "ai_task_sidebar_app_id": "852ddafb-2cb9-4cbf-8a8c-075389fb3d3d",
         "build_number": 0,
         "created_at": "2019-08-24T14:15:22Z",
         "daily_cost": 0,
@@ -1020,6 +1125,7 @@ curl -X GET http://coder-server:8080/api/v2/workspaces \
             "template_id": "c6d67e98-83ea-49f0-8812-e4abae2b68bc",
             "template_name": "string",
             "template_version_name": "string",
+            "workspace_build_transition": "start",
             "workspace_id": "0967198e-ec7b-4c6b-b4d3-f71244cadbe9",
             "workspace_name": "string"
           },
@@ -1124,6 +1230,7 @@ curl -X GET http://coder-server:8080/api/v2/workspaces \
                   {
                     "cron": "string",
                     "display_name": "string",
+                    "exit_code": 0,
                     "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
                     "log_path": "string",
                     "log_source_id": "4197ab25-95cf-4b91-9c78-f7f2af5d353a",
@@ -1131,6 +1238,7 @@ curl -X GET http://coder-server:8080/api/v2/workspaces \
                     "run_on_stop": true,
                     "script": "string",
                     "start_blocks_login": true,
+                    "status": "ok",
                     "timeout": 0
                   }
                 ],
@@ -1164,7 +1272,6 @@ curl -X GET http://coder-server:8080/api/v2/workspaces \
           }
         ],
         "status": "pending",
-        "task_app_id": "ca438251-3e16-4fae-b9ab-dd3c237c3735",
         "template_version_id": "0ba39c92-1f1b-4c32-aa3e-9925d7713eb1",
         "template_version_name": "string",
         "template_version_preset_id": "512a53a7-30da-446e-a1fc-713c630baff1",
@@ -1184,6 +1291,21 @@ curl -X GET http://coder-server:8080/api/v2/workspaces \
       "owner_avatar_url": "string",
       "owner_id": "8826ee2e-7933-4665-aef2-2393f84a0d05",
       "owner_name": "string",
+      "shared_with": [
+        {
+          "actor_type": "group",
+          "avatar_url": "http://example.com",
+          "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+          "name": "string",
+          "roles": [
+            "admin"
+          ]
+        }
+      ],
+      "task_id": {
+        "uuid": "string",
+        "valid": true
+      },
       "template_active_version_id": "b0da9c29-67d8-4c87-888c-bafe356f7f3c",
       "template_allow_user_cancel_workspace_jobs": true,
       "template_display_name": "string",
@@ -1218,7 +1340,7 @@ curl -X GET http://coder-server:8080/api/v2/workspaces/{workspace} \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /workspaces/{workspace}`
+`GET /api/v2/workspaces/{workspace}`
 
 ### Parameters
 
@@ -1262,7 +1384,6 @@ curl -X GET http://coder-server:8080/api/v2/workspaces/{workspace} \
     "workspace_id": "0967198e-ec7b-4c6b-b4d3-f71244cadbe9"
   },
   "latest_build": {
-    "ai_task_sidebar_app_id": "852ddafb-2cb9-4cbf-8a8c-075389fb3d3d",
     "build_number": 0,
     "created_at": "2019-08-24T14:15:22Z",
     "daily_cost": 0,
@@ -1296,6 +1417,7 @@ curl -X GET http://coder-server:8080/api/v2/workspaces/{workspace} \
         "template_id": "c6d67e98-83ea-49f0-8812-e4abae2b68bc",
         "template_name": "string",
         "template_version_name": "string",
+        "workspace_build_transition": "start",
         "workspace_id": "0967198e-ec7b-4c6b-b4d3-f71244cadbe9",
         "workspace_name": "string"
       },
@@ -1417,6 +1539,7 @@ curl -X GET http://coder-server:8080/api/v2/workspaces/{workspace} \
               {
                 "cron": "string",
                 "display_name": "string",
+                "exit_code": 0,
                 "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
                 "log_path": "string",
                 "log_source_id": "4197ab25-95cf-4b91-9c78-f7f2af5d353a",
@@ -1424,6 +1547,7 @@ curl -X GET http://coder-server:8080/api/v2/workspaces/{workspace} \
                 "run_on_stop": true,
                 "script": "string",
                 "start_blocks_login": true,
+                "status": "ok",
                 "timeout": 0
               }
             ],
@@ -1457,7 +1581,6 @@ curl -X GET http://coder-server:8080/api/v2/workspaces/{workspace} \
       }
     ],
     "status": "pending",
-    "task_app_id": "ca438251-3e16-4fae-b9ab-dd3c237c3735",
     "template_version_id": "0ba39c92-1f1b-4c32-aa3e-9925d7713eb1",
     "template_version_name": "string",
     "template_version_preset_id": "512a53a7-30da-446e-a1fc-713c630baff1",
@@ -1477,6 +1600,21 @@ curl -X GET http://coder-server:8080/api/v2/workspaces/{workspace} \
   "owner_avatar_url": "string",
   "owner_id": "8826ee2e-7933-4665-aef2-2393f84a0d05",
   "owner_name": "string",
+  "shared_with": [
+    {
+      "actor_type": "group",
+      "avatar_url": "http://example.com",
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "name": "string",
+      "roles": [
+        "admin"
+      ]
+    }
+  ],
+  "task_id": {
+    "uuid": "string",
+    "valid": true
+  },
   "template_active_version_id": "b0da9c29-67d8-4c87-888c-bafe356f7f3c",
   "template_allow_user_cancel_workspace_jobs": true,
   "template_display_name": "string",
@@ -1509,7 +1647,7 @@ curl -X PATCH http://coder-server:8080/api/v2/workspaces/{workspace} \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`PATCH /workspaces/{workspace}`
+`PATCH /api/v2/workspaces/{workspace}`
 
 > Body parameter
 
@@ -1545,7 +1683,7 @@ curl -X GET http://coder-server:8080/api/v2/workspaces/{workspace}/acl \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /workspaces/{workspace}/acl`
+`GET /api/v2/workspaces/{workspace}/acl`
 
 ### Parameters
 
@@ -1570,6 +1708,7 @@ curl -X GET http://coder-server:8080/api/v2/workspaces/{workspace}/acl \
           "created_at": "2019-08-24T14:15:22Z",
           "email": "user@example.com",
           "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+          "is_service_account": true,
           "last_seen_at": "2019-08-24T14:15:22Z",
           "login_type": "",
           "name": "string",
@@ -1619,7 +1758,7 @@ curl -X DELETE http://coder-server:8080/api/v2/workspaces/{workspace}/acl \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`DELETE /workspaces/{workspace}/acl`
+`DELETE /api/v2/workspaces/{workspace}/acl`
 
 ### Parameters
 
@@ -1646,7 +1785,7 @@ curl -X PATCH http://coder-server:8080/api/v2/workspaces/{workspace}/acl \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`PATCH /workspaces/{workspace}/acl`
+`PATCH /api/v2/workspaces/{workspace}/acl`
 
 > Body parameter
 
@@ -1689,7 +1828,7 @@ curl -X PUT http://coder-server:8080/api/v2/workspaces/{workspace}/autostart \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`PUT /workspaces/{workspace}/autostart`
+`PUT /api/v2/workspaces/{workspace}/autostart`
 
 > Body parameter
 
@@ -1725,7 +1864,7 @@ curl -X PUT http://coder-server:8080/api/v2/workspaces/{workspace}/autoupdates \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`PUT /workspaces/{workspace}/autoupdates`
+`PUT /api/v2/workspaces/{workspace}/autoupdates`
 
 > Body parameter
 
@@ -1762,7 +1901,7 @@ curl -X PUT http://coder-server:8080/api/v2/workspaces/{workspace}/dormant \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`PUT /workspaces/{workspace}/dormant`
+`PUT /api/v2/workspaces/{workspace}/dormant`
 
 > Body parameter
 
@@ -1814,7 +1953,6 @@ curl -X PUT http://coder-server:8080/api/v2/workspaces/{workspace}/dormant \
     "workspace_id": "0967198e-ec7b-4c6b-b4d3-f71244cadbe9"
   },
   "latest_build": {
-    "ai_task_sidebar_app_id": "852ddafb-2cb9-4cbf-8a8c-075389fb3d3d",
     "build_number": 0,
     "created_at": "2019-08-24T14:15:22Z",
     "daily_cost": 0,
@@ -1848,6 +1986,7 @@ curl -X PUT http://coder-server:8080/api/v2/workspaces/{workspace}/dormant \
         "template_id": "c6d67e98-83ea-49f0-8812-e4abae2b68bc",
         "template_name": "string",
         "template_version_name": "string",
+        "workspace_build_transition": "start",
         "workspace_id": "0967198e-ec7b-4c6b-b4d3-f71244cadbe9",
         "workspace_name": "string"
       },
@@ -1969,6 +2108,7 @@ curl -X PUT http://coder-server:8080/api/v2/workspaces/{workspace}/dormant \
               {
                 "cron": "string",
                 "display_name": "string",
+                "exit_code": 0,
                 "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
                 "log_path": "string",
                 "log_source_id": "4197ab25-95cf-4b91-9c78-f7f2af5d353a",
@@ -1976,6 +2116,7 @@ curl -X PUT http://coder-server:8080/api/v2/workspaces/{workspace}/dormant \
                 "run_on_stop": true,
                 "script": "string",
                 "start_blocks_login": true,
+                "status": "ok",
                 "timeout": 0
               }
             ],
@@ -2009,7 +2150,6 @@ curl -X PUT http://coder-server:8080/api/v2/workspaces/{workspace}/dormant \
       }
     ],
     "status": "pending",
-    "task_app_id": "ca438251-3e16-4fae-b9ab-dd3c237c3735",
     "template_version_id": "0ba39c92-1f1b-4c32-aa3e-9925d7713eb1",
     "template_version_name": "string",
     "template_version_preset_id": "512a53a7-30da-446e-a1fc-713c630baff1",
@@ -2029,6 +2169,21 @@ curl -X PUT http://coder-server:8080/api/v2/workspaces/{workspace}/dormant \
   "owner_avatar_url": "string",
   "owner_id": "8826ee2e-7933-4665-aef2-2393f84a0d05",
   "owner_name": "string",
+  "shared_with": [
+    {
+      "actor_type": "group",
+      "avatar_url": "http://example.com",
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "name": "string",
+      "roles": [
+        "admin"
+      ]
+    }
+  ],
+  "task_id": {
+    "uuid": "string",
+    "valid": true
+  },
   "template_active_version_id": "b0da9c29-67d8-4c87-888c-bafe356f7f3c",
   "template_allow_user_cancel_workspace_jobs": true,
   "template_display_name": "string",
@@ -2062,7 +2217,7 @@ curl -X PUT http://coder-server:8080/api/v2/workspaces/{workspace}/extend \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`PUT /workspaces/{workspace}/extend`
+`PUT /api/v2/workspaces/{workspace}/extend`
 
 > Body parameter
 
@@ -2114,7 +2269,7 @@ curl -X PUT http://coder-server:8080/api/v2/workspaces/{workspace}/favorite \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`PUT /workspaces/{workspace}/favorite`
+`PUT /api/v2/workspaces/{workspace}/favorite`
 
 ### Parameters
 
@@ -2140,7 +2295,7 @@ curl -X DELETE http://coder-server:8080/api/v2/workspaces/{workspace}/favorite \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`DELETE /workspaces/{workspace}/favorite`
+`DELETE /api/v2/workspaces/{workspace}/favorite`
 
 ### Parameters
 
@@ -2167,7 +2322,7 @@ curl -X GET http://coder-server:8080/api/v2/workspaces/{workspace}/resolve-autos
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /workspaces/{workspace}/resolve-autostart`
+`GET /api/v2/workspaces/{workspace}/resolve-autostart`
 
 ### Parameters
 
@@ -2204,7 +2359,7 @@ curl -X GET http://coder-server:8080/api/v2/workspaces/{workspace}/timings \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /workspaces/{workspace}/timings`
+`GET /api/v2/workspaces/{workspace}/timings`
 
 ### Parameters
 
@@ -2272,7 +2427,7 @@ curl -X PUT http://coder-server:8080/api/v2/workspaces/{workspace}/ttl \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`PUT /workspaces/{workspace}/ttl`
+`PUT /api/v2/workspaces/{workspace}/ttl`
 
 > Body parameter
 
@@ -2308,7 +2463,7 @@ curl -X POST http://coder-server:8080/api/v2/workspaces/{workspace}/usage \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`POST /workspaces/{workspace}/usage`
+`POST /api/v2/workspaces/{workspace}/usage`
 
 > Body parameter
 
@@ -2345,7 +2500,7 @@ curl -X GET http://coder-server:8080/api/v2/workspaces/{workspace}/watch \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /workspaces/{workspace}/watch`
+`GET /api/v2/workspaces/{workspace}/watch`
 
 ### Parameters
 
@@ -2376,7 +2531,7 @@ curl -X GET http://coder-server:8080/api/v2/workspaces/{workspace}/watch-ws \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /workspaces/{workspace}/watch-ws`
+`GET /api/v2/workspaces/{workspace}/watch-ws`
 
 ### Parameters
 

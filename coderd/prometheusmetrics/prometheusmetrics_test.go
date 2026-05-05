@@ -14,17 +14,18 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"tailscale.com/tailcfg"
 
-	"cdr.dev/slog"
-	"cdr.dev/slog/sloggers/slogtest"
-
+	"cdr.dev/slog/v3"
+	"cdr.dev/slog/v3/sloggers/slogtest"
 	agentproto "github.com/coder/coder/v2/agent/proto"
 	"github.com/coder/coder/v2/coderd/agentmetrics"
 	"github.com/coder/coder/v2/coderd/coderdtest"
 	"github.com/coder/coder/v2/coderd/database"
+	"github.com/coder/coder/v2/coderd/database/dbauthz"
 	"github.com/coder/coder/v2/coderd/database/dbgen"
 	"github.com/coder/coder/v2/coderd/database/dbtestutil"
 	"github.com/coder/coder/v2/coderd/database/dbtime"
@@ -536,9 +537,9 @@ func TestAgents(t *testing.T) {
 	version := coderdtest.CreateTemplateVersion(t, client, user.OrganizationID, &echo.Responses{
 		Parse:         echo.ParseComplete,
 		ProvisionPlan: echo.PlanComplete,
-		ProvisionApply: []*proto.Response{{
-			Type: &proto.Response_Apply{
-				Apply: &proto.ApplyComplete{
+		ProvisionGraph: []*proto.Response{{
+			Type: &proto.Response_Graph{
+				Graph: &proto.GraphComplete{
 					Resources: []*proto.Resource{{
 						Name: "example",
 						Type: "aws_instance",
@@ -569,6 +570,38 @@ func TestAgents(t *testing.T) {
 	workspace := coderdtest.CreateWorkspace(t, client, template.ID)
 	coderdtest.AwaitWorkspaceBuildJobCompleted(t, client, workspace.LatestBuild.ID)
 
+	// Set first_connected_at on the agent so the first connection
+	// duration metric can be observed.
+	workspace = coderdtest.MustWorkspace(t, client, workspace.ID)
+	require.NotEmpty(t, workspace.LatestBuild.Resources)
+	var testAgentID uuid.UUID
+	var testAgentCreatedAt time.Time
+	for _, res := range workspace.LatestBuild.Resources {
+		for _, a := range res.Agents {
+			if a.Name == "testagent" {
+				testAgentID = a.ID
+				testAgentCreatedAt = a.CreatedAt
+				break
+			}
+		}
+	}
+	require.NotEqual(t, uuid.Nil, testAgentID, "testagent not found")
+	err := db.UpdateWorkspaceAgentConnectionByID(dbauthz.AsSystemRestricted(context.Background()), database.UpdateWorkspaceAgentConnectionByIDParams{
+		ID: testAgentID,
+		FirstConnectedAt: sql.NullTime{
+			Time:  testAgentCreatedAt.Add(45 * time.Second),
+			Valid: true,
+		},
+		LastConnectedAt: sql.NullTime{
+			Time:  testAgentCreatedAt.Add(45 * time.Second),
+			Valid: true,
+		},
+		DisconnectedAt:         sql.NullTime{},
+		UpdatedAt:              dbtime.Now(),
+		LastConnectedReplicaID: uuid.NullUUID{},
+	})
+	require.NoError(t, err)
+
 	// given
 	derpMap, _ := tailnettest.RunDERPAndSTUN(t)
 	derpMapFn := func() *tailcfg.DERPMap {
@@ -595,6 +628,7 @@ func TestAgents(t *testing.T) {
 	var agentsConnections bool
 	var agentsApps bool
 	var agentsExecutionInSeconds bool
+	var agentsFirstConnection bool
 	require.Eventually(t, func() bool {
 		metrics, err := registry.Gather()
 		assert.NoError(t, err)
@@ -615,7 +649,7 @@ func TestAgents(t *testing.T) {
 			case "coderd_agents_connections":
 				assert.Equal(t, "testagent", metric.Metric[0].Label[0].GetValue())    // Agent name
 				assert.Equal(t, "created", metric.Metric[0].Label[1].GetValue())      // Lifecycle state
-				assert.Equal(t, "connecting", metric.Metric[0].Label[2].GetValue())   // Status
+				assert.Equal(t, "connected", metric.Metric[0].Label[2].GetValue())    // Status
 				assert.Equal(t, "unknown", metric.Metric[0].Label[3].GetValue())      // Tailnet node
 				assert.Equal(t, "testuser", metric.Metric[0].Label[4].GetValue())     // Username
 				assert.Equal(t, workspace.Name, metric.Metric[0].Label[5].GetValue()) // Workspace name
@@ -631,11 +665,23 @@ func TestAgents(t *testing.T) {
 				agentsApps = true
 			case "coderd_prometheusmetrics_agents_execution_seconds":
 				agentsExecutionInSeconds = true
+			case "coderd_agents_first_connection_seconds":
+				for _, m := range metric.Metric {
+					if m.Histogram != nil && m.Histogram.GetSampleCount() > 0 {
+						assert.Equal(t, "testagent", getLabelValue(m, "agent_name"))
+						assert.Equal(t, template.Name, getLabelValue(m, "template_name"))
+						assert.Equal(t, "testuser", getLabelValue(m, "username"))
+						assert.Equal(t, workspace.Name, getLabelValue(m, "workspace_name"))
+						assert.Equal(t, uint64(1), m.Histogram.GetSampleCount())
+						assert.InDelta(t, 45.0, m.Histogram.GetSampleSum(), 1.0)
+						agentsFirstConnection = true
+					}
+				}
 			default:
 				require.FailNowf(t, "unexpected metric collected", "metric: %s", metric.GetName())
 			}
 		}
-		return agentsUp && agentsConnections && agentsApps && agentsExecutionInSeconds
+		return agentsUp && agentsConnections && agentsApps && agentsExecutionInSeconds && agentsFirstConnection
 	}, testutil.WaitShort, testutil.IntervalFast)
 }
 
@@ -860,13 +906,40 @@ func TestExperimentsMetric(t *testing.T) {
 	}
 }
 
+func TestBuildInfo(t *testing.T) {
+	t.Parallel()
+
+	reg := prometheus.NewRegistry()
+	version := "v2.15.0+abc1234"
+	revision := "abc1234def5678"
+
+	require.NoError(t, prometheusmetrics.BuildInfo(reg, version, revision))
+
+	out, err := reg.Gather()
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	require.Equal(t, "coderd_build_info", out[0].GetName())
+
+	metrics := out[0].GetMetric()
+	require.Len(t, metrics, 1)
+
+	// Labels are sorted alphabetically by Prometheus.
+	labels := metrics[0].GetLabel()
+	require.Len(t, labels, 2)
+	require.Equal(t, "revision", labels[0].GetName())
+	require.Equal(t, revision, labels[0].GetValue())
+	require.Equal(t, "version", labels[1].GetName())
+	require.Equal(t, version, labels[1].GetValue())
+	require.Equal(t, float64(1), metrics[0].GetGauge().GetValue())
+}
+
 func prepareWorkspaceAndAgent(ctx context.Context, t *testing.T, client *codersdk.Client, user codersdk.CreateFirstUserResponse, workspaceNum int) agentproto.DRPCAgentClient {
 	authToken := uuid.NewString()
 
 	version := coderdtest.CreateTemplateVersion(t, client, user.OrganizationID, &echo.Responses{
 		Parse:          echo.ParseComplete,
 		ProvisionPlan:  echo.PlanComplete,
-		ProvisionApply: echo.ProvisionApplyWithAgent(authToken),
+		ProvisionGraph: echo.ProvisionGraphWithAgent(authToken),
 	})
 	template := coderdtest.CreateTemplate(t, client, user.OrganizationID, version.ID)
 	coderdtest.AwaitTemplateVersionJobCompleted(t, client, version.ID)
@@ -1081,4 +1154,13 @@ func insertDeleted(t *testing.T, db database.Store, u database.User, org databas
 		Deleted: true,
 	})
 	require.NoError(t, err)
+}
+
+func getLabelValue(m *dto.Metric, name string) string {
+	for _, l := range m.Label {
+		if l.GetName() == name {
+			return l.GetValue()
+		}
+	}
+	return ""
 }

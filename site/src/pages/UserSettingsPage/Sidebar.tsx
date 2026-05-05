@@ -1,11 +1,3 @@
-import type { User } from "api/typesGenerated";
-import { Avatar } from "components/Avatar/Avatar";
-import { GitIcon } from "components/Icons/GitIcon";
-import {
-	Sidebar as BaseSidebar,
-	SidebarHeader,
-	SidebarNavItem,
-} from "components/Sidebar/Sidebar";
 import {
 	BellIcon,
 	BrushIcon,
@@ -16,9 +8,17 @@ import {
 	ShieldIcon,
 	UserIcon,
 } from "lucide-react";
-import { useDashboard } from "modules/dashboard/useDashboard";
 import type { FC } from "react";
-import { isDevBuild } from "utils/buildInfo";
+import type { User } from "#/api/typesGenerated";
+import { Avatar } from "#/components/Avatar/Avatar";
+import { GitIcon } from "#/components/Icons/GitIcon";
+import {
+	Sidebar as BaseSidebar,
+	SidebarHeader,
+	SidebarNavItem,
+} from "#/components/Sidebar/Sidebar";
+import { useDashboard } from "#/modules/dashboard/useDashboard";
+import { getPrereleaseFlag } from "#/utils/buildInfo";
 
 interface SidebarProps {
 	user: User;
@@ -45,7 +45,8 @@ export const Sidebar: FC<SidebarProps> = ({ user }) => {
 			<SidebarNavItem href="external-auth" icon={GitIcon}>
 				External Authentication
 			</SidebarNavItem>
-			{(experiments.includes("oauth2") || isDevBuild(buildInfo)) && (
+			{(experiments.includes("oauth2") ||
+				getPrereleaseFlag(buildInfo) === "devel") && (
 				<SidebarNavItem href="oauth2-provider" icon={ShieldIcon}>
 					OAuth2 Applications
 				</SidebarNavItem>

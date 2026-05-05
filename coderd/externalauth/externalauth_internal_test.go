@@ -1,10 +1,15 @@
 package externalauth
 
 import (
+	"net/http"
 	"testing"
+	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/oauth2"
 
+	"github.com/coder/coder/v2/coderd/promoauth"
 	"github.com/coder/coder/v2/codersdk"
 )
 
@@ -13,17 +18,21 @@ func TestGitlabDefaults(t *testing.T) {
 
 	// The default cloud setup. Copying this here as hard coded
 	// values.
-	cloud := codersdk.ExternalAuthConfig{
-		Type:        string(codersdk.EnhancedExternalAuthProviderGitLab),
-		ID:          string(codersdk.EnhancedExternalAuthProviderGitLab),
-		AuthURL:     "https://gitlab.com/oauth/authorize",
-		TokenURL:    "https://gitlab.com/oauth/token",
-		ValidateURL: "https://gitlab.com/oauth/token/info",
-		RevokeURL:   "https://gitlab.com/oauth/revoke",
-		DisplayName: "GitLab",
-		DisplayIcon: "/icon/gitlab.svg",
-		Regex:       `^(https?://)?gitlab\.com(/.*)?$`,
-		Scopes:      []string{"write_repository"},
+	cloud := func() codersdk.ExternalAuthConfig {
+		return codersdk.ExternalAuthConfig{
+			Type:                          string(codersdk.EnhancedExternalAuthProviderGitLab),
+			ID:                            string(codersdk.EnhancedExternalAuthProviderGitLab),
+			AuthURL:                       "https://gitlab.com/oauth/authorize",
+			TokenURL:                      "https://gitlab.com/oauth/token",
+			ValidateURL:                   "https://gitlab.com/oauth/token/info",
+			RevokeURL:                     "https://gitlab.com/oauth/revoke",
+			DisplayName:                   "GitLab",
+			DisplayIcon:                   "/icon/gitlab.svg",
+			Regex:                         `^(https?://)?gitlab\.com(/.*)?$`,
+			APIBaseURL:                    "https://gitlab.com/api/v4",
+			Scopes:                        []string{"write_repository"},
+			CodeChallengeMethodsSupported: []string{string(promoauth.PKCEChallengeMethodSha256)},
+		}
 	}
 
 	tests := []struct {
@@ -38,7 +47,7 @@ func TestGitlabDefaults(t *testing.T) {
 			input: codersdk.ExternalAuthConfig{
 				Type: string(codersdk.EnhancedExternalAuthProviderGitLab),
 			},
-			expected: cloud,
+			expected: cloud(),
 		},
 		{
 			// If someone was to manually configure the gitlab cli.
@@ -47,7 +56,7 @@ func TestGitlabDefaults(t *testing.T) {
 				Type:    string(codersdk.EnhancedExternalAuthProviderGitLab),
 				AuthURL: "https://gitlab.com/oauth/authorize",
 			},
-			expected: cloud,
+			expected: cloud(),
 		},
 		{
 			// Changing some of the defaults of the cloud option
@@ -60,7 +69,7 @@ func TestGitlabDefaults(t *testing.T) {
 				DisplayName: "custom",
 				Regex:       ".*",
 			},
-			expected: cloud,
+			expected: cloud(),
 			mutateExpected: func(config *codersdk.ExternalAuthConfig) {
 				config.AuthURL = "https://gitlab.com/oauth/authorize?foo=bar"
 				config.DisplayName = "custom"
@@ -75,7 +84,7 @@ func TestGitlabDefaults(t *testing.T) {
 				Type:    string(codersdk.EnhancedExternalAuthProviderGitLab),
 				AuthURL: "https://gitlab.company.org/oauth/authorize?foo=bar",
 			},
-			expected: cloud,
+			expected: cloud(),
 			mutateExpected: func(config *codersdk.ExternalAuthConfig) {
 				config.AuthURL = "https://gitlab.company.org/oauth/authorize?foo=bar"
 				config.ValidateURL = "https://gitlab.company.org/oauth/token/info"
@@ -88,20 +97,22 @@ func TestGitlabDefaults(t *testing.T) {
 			// Strange values
 			name: "RandomValues",
 			input: codersdk.ExternalAuthConfig{
-				Type:        string(codersdk.EnhancedExternalAuthProviderGitLab),
-				AuthURL:     "https://auth.com/auth",
-				ValidateURL: "https://validate.com/validate",
-				TokenURL:    "https://token.com/token",
-				RevokeURL:   "https://token.com/revoke",
-				Regex:       "random",
+				Type:                          string(codersdk.EnhancedExternalAuthProviderGitLab),
+				AuthURL:                       "https://auth.com/auth",
+				ValidateURL:                   "https://validate.com/validate",
+				TokenURL:                      "https://token.com/token",
+				RevokeURL:                     "https://token.com/revoke",
+				Regex:                         "random",
+				CodeChallengeMethodsSupported: []string{"random"},
 			},
-			expected: cloud,
+			expected: cloud(),
 			mutateExpected: func(config *codersdk.ExternalAuthConfig) {
 				config.AuthURL = "https://auth.com/auth"
 				config.ValidateURL = "https://validate.com/validate"
 				config.TokenURL = "https://token.com/token"
 				config.RevokeURL = "https://token.com/revoke"
 				config.Regex = `random`
+				config.CodeChallengeMethodsSupported = []string{"random"}
 			},
 		},
 	}
@@ -113,6 +124,87 @@ func TestGitlabDefaults(t *testing.T) {
 				c.mutateExpected(&c.expected)
 			}
 			require.Equal(t, c.input, c.expected)
+		})
+	}
+}
+
+func TestIsFailedRefresh(t *testing.T) {
+	t.Parallel()
+
+	expiredToken := &oauth2.Token{
+		RefreshToken: "refresh-token",
+		// isFailedRefresh returns early at the existingToken.Valid()
+		// guard if the token is valid. Valid() requires
+		// AccessToken != "" AND not expired. This fixture has no
+		// AccessToken so Valid() is always false, but we set an
+		// expired time as a safety net in case someone later adds
+		// an AccessToken field.
+		Expiry: time.Now().Add(-time.Hour),
+	}
+
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{
+			name: "IncorrectClientCredentials_StatusOK",
+			err: &oauth2.RetrieveError{
+				Response:  &http.Response{StatusCode: http.StatusOK},
+				ErrorCode: "incorrect_client_credentials",
+			},
+			// StatusOK fallthrough also returns true, so this test
+			// documents the combined behavior. See the 403-status
+			// variant below for error-code-only isolation.
+			expected: true,
+		},
+		{
+			// Uses 403 status (excluded from the status code switch)
+			// so the only path to true is the error code switch.
+			name: "IncorrectClientCredentials_Status403",
+			err: &oauth2.RetrieveError{
+				Response:  &http.Response{StatusCode: http.StatusForbidden},
+				ErrorCode: "incorrect_client_credentials",
+			},
+			expected: true,
+		},
+		{
+			name: "InvalidClient_Status401",
+			err: &oauth2.RetrieveError{
+				Response:  &http.Response{StatusCode: http.StatusUnauthorized},
+				ErrorCode: "invalid_client",
+			},
+			// StatusUnauthorized fallthrough also returns true, so
+			// this test documents the combined behavior.
+			expected: true,
+		},
+		{
+			// Uses 403 status (excluded from the status code switch)
+			// so the only path to true is the error code switch.
+			name: "InvalidClient_Status403",
+			err: &oauth2.RetrieveError{
+				Response:  &http.Response{StatusCode: http.StatusForbidden},
+				ErrorCode: "invalid_client",
+			},
+			expected: true,
+		},
+		{
+			name: "UnknownErrorCode_Status403_Transient",
+			err: &oauth2.RetrieveError{
+				Response:  &http.Response{StatusCode: http.StatusForbidden},
+				ErrorCode: "unknown_code",
+			},
+			// 403 with unknown error code should be transient (safe
+			// default: retry rather than destroy the token).
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := isFailedRefresh(expiredToken, tt.err)
+			assert.Equal(t, tt.expected, got)
 		})
 	}
 }
@@ -133,11 +225,12 @@ func Test_bitbucketServerConfigDefaults(t *testing.T) {
 				Type: bbType,
 			},
 			expected: codersdk.ExternalAuthConfig{
-				Type:        bbType,
-				ID:          bbType,
-				DisplayName: "Bitbucket Server",
-				Scopes:      []string{"PUBLIC_REPOS", "REPO_READ", "REPO_WRITE"},
-				DisplayIcon: "/icon/bitbucket.svg",
+				Type:                          bbType,
+				ID:                            bbType,
+				DisplayName:                   "Bitbucket Server",
+				Scopes:                        []string{"PUBLIC_REPOS", "REPO_READ", "REPO_WRITE"},
+				DisplayIcon:                   "/icon/bitbucket.svg",
+				CodeChallengeMethodsSupported: []string{string(promoauth.PKCEChallengeMethodNone)},
 			},
 		},
 		{
@@ -148,15 +241,16 @@ func Test_bitbucketServerConfigDefaults(t *testing.T) {
 				AuthURL: "https://bitbucket.example.com/login/oauth/authorize",
 			},
 			expected: codersdk.ExternalAuthConfig{
-				Type:        bbType,
-				ID:          bbType,
-				AuthURL:     "https://bitbucket.example.com/login/oauth/authorize",
-				TokenURL:    "https://bitbucket.example.com/rest/oauth2/latest/token",
-				ValidateURL: "https://bitbucket.example.com/rest/api/latest/inbox/pull-requests/count",
-				Scopes:      []string{"PUBLIC_REPOS", "REPO_READ", "REPO_WRITE"},
-				Regex:       `^(https?://)?bitbucket\.example\.com(/.*)?$`,
-				DisplayName: "Bitbucket Server",
-				DisplayIcon: "/icon/bitbucket.svg",
+				Type:                          bbType,
+				ID:                            bbType,
+				AuthURL:                       "https://bitbucket.example.com/login/oauth/authorize",
+				TokenURL:                      "https://bitbucket.example.com/rest/oauth2/latest/token",
+				ValidateURL:                   "https://bitbucket.example.com/rest/api/latest/inbox/pull-requests/count",
+				Scopes:                        []string{"PUBLIC_REPOS", "REPO_READ", "REPO_WRITE"},
+				Regex:                         `^(https?://)?bitbucket\.example\.com(/.*)?$`,
+				DisplayName:                   "Bitbucket Server",
+				DisplayIcon:                   "/icon/bitbucket.svg",
+				CodeChallengeMethodsSupported: []string{string(promoauth.PKCEChallengeMethodNone)},
 			},
 		},
 		{
@@ -167,15 +261,16 @@ func Test_bitbucketServerConfigDefaults(t *testing.T) {
 				Type: "bitbucket",
 			},
 			expected: codersdk.ExternalAuthConfig{
-				Type:        string(codersdk.EnhancedExternalAuthProviderBitBucketCloud),
-				ID:          "bitbucket", // Legacy ID remains unchanged
-				AuthURL:     "https://bitbucket.org/site/oauth2/authorize",
-				TokenURL:    "https://bitbucket.org/site/oauth2/access_token",
-				ValidateURL: "https://api.bitbucket.org/2.0/user",
-				DisplayName: "BitBucket",
-				DisplayIcon: "/icon/bitbucket.svg",
-				Regex:       `^(https?://)?bitbucket\.org(/.*)?$`,
-				Scopes:      []string{"account", "repository:write"},
+				Type:                          string(codersdk.EnhancedExternalAuthProviderBitBucketCloud),
+				ID:                            "bitbucket", // Legacy ID remains unchanged
+				AuthURL:                       "https://bitbucket.org/site/oauth2/authorize",
+				TokenURL:                      "https://bitbucket.org/site/oauth2/access_token",
+				ValidateURL:                   "https://api.bitbucket.org/2.0/user",
+				DisplayName:                   "BitBucket",
+				DisplayIcon:                   "/icon/bitbucket.svg",
+				Regex:                         `^(https?://)?bitbucket\.org(/.*)?$`,
+				Scopes:                        []string{"account", "repository:write"},
+				CodeChallengeMethodsSupported: []string{string(promoauth.PKCEChallengeMethodNone)},
 			},
 		},
 	}
@@ -184,6 +279,48 @@ func Test_bitbucketServerConfigDefaults(t *testing.T) {
 			t.Parallel()
 			applyDefaultsToConfig(tt.config)
 			require.Equal(t, tt.expected, *tt.config)
+		})
+	}
+}
+
+func TestUntyped(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    codersdk.ExternalAuthConfig
+		expected codersdk.ExternalAuthConfig
+	}{
+		{
+			// Unknown Type uses S256 by default.
+			name: "RandomValues",
+			input: codersdk.ExternalAuthConfig{
+				Type:        "unknown",
+				AuthURL:     "https://auth.com/auth",
+				ValidateURL: "https://validate.com/validate",
+				TokenURL:    "https://token.com/token",
+				RevokeURL:   "https://token.com/revoke",
+				Regex:       "random",
+			},
+			expected: codersdk.ExternalAuthConfig{
+				ID:                            "unknown",
+				Type:                          "unknown",
+				DisplayName:                   "unknown",
+				DisplayIcon:                   "/emojis/1f511.png",
+				AuthURL:                       "https://auth.com/auth",
+				ValidateURL:                   "https://validate.com/validate",
+				TokenURL:                      "https://token.com/token",
+				RevokeURL:                     "https://token.com/revoke",
+				Regex:                         `random`,
+				CodeChallengeMethodsSupported: []string{string(promoauth.PKCEChallengeMethodSha256)},
+			},
+		},
+	}
+	for _, c := range tests {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			applyDefaultsToConfig(&c.input)
+			require.Equal(t, c.input, c.expected)
 		})
 	}
 }

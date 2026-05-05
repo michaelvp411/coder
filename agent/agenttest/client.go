@@ -21,7 +21,7 @@ import (
 	"storj.io/drpc/drpcserver"
 	"tailscale.com/tailcfg"
 
-	"cdr.dev/slog"
+	"cdr.dev/slog/v3"
 	agentproto "github.com/coder/coder/v2/agent/proto"
 	"github.com/coder/coder/v2/codersdk"
 	"github.com/coder/coder/v2/codersdk/agentsdk"
@@ -38,6 +38,21 @@ func NewClient(t testing.TB,
 	logger slog.Logger,
 	agentID uuid.UUID,
 	manifest agentsdk.Manifest,
+	statsChan chan *agentproto.Stats,
+	coordinator tailnet.Coordinator,
+) *Client {
+	return NewClientWithSecrets(t, logger, agentID, manifest, nil, statsChan, coordinator)
+}
+
+// NewClientWithSecrets is like NewClient but also injects user
+// secrets into the agent's proto manifest. Separate from NewClient
+// because agentsdk.Manifest intentionally does not carry secrets;
+// see the Manifest doc comment in codersdk/agentsdk.
+func NewClientWithSecrets(t testing.TB,
+	logger slog.Logger,
+	agentID uuid.UUID,
+	manifest agentsdk.Manifest,
+	secrets []agentsdk.WorkspaceSecret,
 	statsChan chan *agentproto.Stats,
 	coordinator tailnet.Coordinator,
 ) *Client {
@@ -58,6 +73,7 @@ func NewClient(t testing.TB,
 	require.NoError(t, err)
 	mp, err := agentsdk.ProtoFromManifest(manifest)
 	require.NoError(t, err)
+	mp.Secrets = agentsdk.ProtoFromSecrets(secrets)
 	fakeAAPI := NewFakeAgentAPI(t, logger, mp, statsChan)
 	err = agentproto.DRPCRegisterAgent(mux, fakeAAPI)
 	require.NoError(t, err)
@@ -124,8 +140,14 @@ func (c *Client) Close() {
 	c.derpMapOnce.Do(func() { close(c.derpMapUpdates) })
 }
 
-func (c *Client) ConnectRPC26(ctx context.Context) (
-	agentproto.DRPCAgentClient26, proto.DRPCTailnetClient26, error,
+func (c *Client) ConnectRPC29WithRole(ctx context.Context, _ string) (
+	agentproto.DRPCAgentClient29, proto.DRPCTailnetClient28, error,
+) {
+	return c.ConnectRPC29(ctx)
+}
+
+func (c *Client) ConnectRPC29(ctx context.Context) (
+	agentproto.DRPCAgentClient29, proto.DRPCTailnetClient28, error,
 ) {
 	conn, lis := drpcsdk.MemTransportPipe()
 	c.LastWorkspaceAgent = func() {
@@ -227,6 +249,10 @@ type FakeAgentAPI struct {
 	getAnnouncementBannersFunc              func() ([]codersdk.BannerConfig, error)
 	getResourcesMonitoringConfigurationFunc func() (*agentproto.GetResourcesMonitoringConfigurationResponse, error)
 	pushResourcesMonitoringUsageFunc        func(*agentproto.PushResourcesMonitoringUsageRequest) (*agentproto.PushResourcesMonitoringUsageResponse, error)
+}
+
+func (*FakeAgentAPI) UpdateAppStatus(context.Context, *agentproto.UpdateAppStatusRequest) (*agentproto.UpdateAppStatusResponse, error) {
+	panic("unimplemented")
 }
 
 func (f *FakeAgentAPI) GetManifest(context.Context, *agentproto.GetManifestRequest) (*agentproto.Manifest, error) {
@@ -403,6 +429,10 @@ func (f *FakeAgentAPI) ReportConnection(_ context.Context, req *agentproto.Repor
 	f.Unlock()
 
 	return &emptypb.Empty{}, nil
+}
+
+func (*FakeAgentAPI) ReportBoundaryLogs(_ context.Context, _ *agentproto.ReportBoundaryLogsRequest) (*agentproto.ReportBoundaryLogsResponse, error) {
+	return &agentproto.ReportBoundaryLogsResponse{}, nil
 }
 
 func (f *FakeAgentAPI) GetConnectionReports() []*agentproto.ReportConnectionRequest {

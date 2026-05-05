@@ -12,8 +12,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/xerrors"
 
-	"cdr.dev/slog"
-
+	"cdr.dev/slog/v3"
 	"github.com/coder/coder/v2/coderd/audit"
 	"github.com/coder/coder/v2/coderd/database"
 	"github.com/coder/coder/v2/coderd/database/db2sdk"
@@ -43,7 +42,7 @@ import (
 // @Tags Agents
 // @Success 200 "Success"
 // @Param user path string true "User ID, name, or me"
-// @Router /debug/{user}/debug-link [get]
+// @Router /api/v2/debug/{user}/debug-link [get]
 // @x-apidocgen {"skip": true}
 func (api *API) userDebugOIDC(rw http.ResponseWriter, r *http.Request) {
 	var (
@@ -73,6 +72,64 @@ func (api *API) userDebugOIDC(rw http.ResponseWriter, r *http.Request) {
 	httpapi.Write(ctx, rw, http.StatusOK, link.Claims)
 }
 
+// Returns the merged OIDC claims for the authenticated user.
+//
+// @Summary Get OIDC claims for the authenticated user
+// @ID get-oidc-claims-for-the-authenticated-user
+// @Security CoderSessionToken
+// @Produce json
+// @Tags Users
+// @Success 200 {object} codersdk.OIDCClaimsResponse
+// @Router /api/v2/users/oidc-claims [get]
+func (api *API) userOIDCClaims(rw http.ResponseWriter, r *http.Request) {
+	var (
+		ctx    = r.Context()
+		apiKey = httpmw.APIKey(r)
+	)
+
+	user, err := api.Database.GetUserByID(ctx, apiKey.UserID)
+	if err != nil {
+		httpapi.Write(ctx, rw, http.StatusInternalServerError, codersdk.Response{
+			Message: "Failed to get user.",
+			Detail:  err.Error(),
+		})
+		return
+	}
+
+	if user.LoginType != database.LoginTypeOIDC {
+		httpapi.Write(ctx, rw, http.StatusBadRequest, codersdk.Response{
+			Message: "User is not an OIDC user.",
+		})
+		return
+	}
+
+	//nolint:gocritic // GetUserLinkByUserIDLoginType requires reading
+	// rbac.ResourceSystem. The endpoint is scoped to the authenticated
+	// user's own identity via apiKey, so this is safe.
+	link, err := api.Database.GetUserLinkByUserIDLoginType(
+		dbauthz.AsSystemRestricted(ctx),
+		database.GetUserLinkByUserIDLoginTypeParams{
+			UserID:    user.ID,
+			LoginType: database.LoginTypeOIDC,
+		},
+	)
+	if err != nil {
+		httpapi.Write(ctx, rw, http.StatusInternalServerError, codersdk.Response{
+			Message: "Failed to get user link.",
+			Detail:  err.Error(),
+		})
+		return
+	}
+
+	claims := link.Claims.MergedClaims
+	if claims == nil {
+		claims = map[string]interface{}{}
+	}
+	httpapi.Write(ctx, rw, http.StatusOK, codersdk.OIDCClaimsResponse{
+		Claims: claims,
+	})
+}
+
 // Returns whether the initial user has been created or not.
 //
 // @Summary Check initial user created
@@ -81,7 +138,7 @@ func (api *API) userDebugOIDC(rw http.ResponseWriter, r *http.Request) {
 // @Produce json
 // @Tags Users
 // @Success 200 {object} codersdk.Response
-// @Router /users/first [get]
+// @Router /api/v2/users/first [get]
 func (api *API) firstUser(rw http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	// nolint:gocritic // Getting user count is a system function.
@@ -116,7 +173,7 @@ func (api *API) firstUser(rw http.ResponseWriter, r *http.Request) {
 // @Tags Users
 // @Param request body codersdk.CreateFirstUserRequest true "First user request"
 // @Success 201 {object} codersdk.CreateFirstUserResponse
-// @Router /users/first [post]
+// @Router /api/v2/users/first [post]
 func (api *API) postFirstUser(rw http.ResponseWriter, r *http.Request) {
 	// The first user can also be created via oidc, so if making changes to the flow,
 	// ensure that the oidc flow is also updated.
@@ -224,8 +281,19 @@ func (api *API) postFirstUser(rw http.ResponseWriter, r *http.Request) {
 	telemetryUser := telemetry.ConvertUser(user)
 	// Send the initial users email address!
 	telemetryUser.Email = &user.Email
+	// Only populate onboarding data when the client actually sent it. A nil
+	// OnboardingInfo means the request came from an older client, the CLI, or
+	// the OIDC flow — not from a user who answered "no" to every question.
+	var onboarding *telemetry.FirstUserOnboarding
+	if createUser.OnboardingInfo != nil {
+		onboarding = &telemetry.FirstUserOnboarding{
+			NewsletterMarketing: createUser.OnboardingInfo.NewsletterMarketing,
+			NewsletterReleases:  createUser.OnboardingInfo.NewsletterReleases,
+		}
+	}
 	api.Telemetry.Report(&telemetry.Snapshot{
-		Users: []telemetry.User{telemetryUser},
+		Users:               []telemetry.User{telemetryUser},
+		FirstUserOnboarding: onboarding,
 	})
 
 	httpapi.Write(ctx, rw, http.StatusCreated, codersdk.CreateFirstUserResponse{
@@ -244,7 +312,7 @@ func (api *API) postFirstUser(rw http.ResponseWriter, r *http.Request) {
 // @Param limit query int false "Page limit"
 // @Param offset query int false "Page offset"
 // @Success 200 {object} codersdk.GetUsersResponse
-// @Router /users [get]
+// @Router /api/v2/users [get]
 func (api *API) users(rw http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	users, userCount, ok := api.GetUsers(rw, r)
@@ -272,8 +340,31 @@ func (api *API) users(rw http.ResponseWriter, r *http.Request) {
 		organizationIDsByUserID[organizationIDsByMemberIDsRow.UserID] = organizationIDsByMemberIDsRow.OrganizationIDs
 	}
 
+	var aiSeatSet map[uuid.UUID]struct{}
+	if api.Entitlements.Enabled(codersdk.FeatureAIGovernanceUserLimit) {
+		var aiSeatUserIDs []uuid.UUID
+		//nolint:gocritic // AI seat state is a system-level read gated by entitlement.
+		aiSeatUserIDs, err = api.Database.GetUserAISeatStates(dbauthz.AsSystemRestricted(ctx), userIDs)
+		if err != nil {
+			if !xerrors.Is(err, sql.ErrNoRows) {
+				api.Logger.Warn(
+					ctx,
+					"failed to fetch AI seat states for users",
+					slog.F("user_count", len(userIDs)),
+					slog.Error(err),
+				)
+			}
+			aiSeatUserIDs = nil
+		}
+
+		aiSeatSet = make(map[uuid.UUID]struct{}, len(aiSeatUserIDs))
+		for _, uid := range aiSeatUserIDs {
+			aiSeatSet[uid] = struct{}{}
+		}
+	}
+
 	httpapi.Write(ctx, rw, http.StatusOK, codersdk.GetUsersResponse{
-		Users: convertUsers(users, organizationIDsByUserID),
+		Users: convertUsers(users, organizationIDsByUserID, aiSeatSet),
 		Count: int(userCount),
 	})
 }
@@ -296,16 +387,18 @@ func (api *API) GetUsers(rw http.ResponseWriter, r *http.Request) ([]database.Us
 	}
 
 	userRows, err := api.Database.GetUsers(ctx, database.GetUsersParams{
-		AfterID:         paginationParams.AfterID,
-		Search:          params.Search,
-		Status:          params.Status,
-		RbacRole:        params.RbacRole,
-		LastSeenBefore:  params.LastSeenBefore,
-		LastSeenAfter:   params.LastSeenAfter,
-		CreatedAfter:    params.CreatedAfter,
-		CreatedBefore:   params.CreatedBefore,
-		GithubComUserID: params.GithubComUserID,
-		LoginType:       params.LoginType,
+		AfterID:          paginationParams.AfterID,
+		Search:           params.Search,
+		Name:             params.Name,
+		Status:           params.Status,
+		IsServiceAccount: params.IsServiceAccount,
+		RbacRole:         params.RbacRole,
+		LastSeenBefore:   params.LastSeenBefore,
+		LastSeenAfter:    params.LastSeenAfter,
+		CreatedAfter:     params.CreatedAfter,
+		CreatedBefore:    params.CreatedBefore,
+		GithubComUserID:  params.GithubComUserID,
+		LoginType:        params.LoginType,
 		// #nosec G115 - Pagination offsets are small and fit in int32
 		OffsetOpt: int32(paginationParams.Offset),
 		// #nosec G115 - Pagination limits are small and fit in int32
@@ -339,7 +432,7 @@ func (api *API) GetUsers(rw http.ResponseWriter, r *http.Request) ([]database.Us
 // @Tags Users
 // @Param request body codersdk.CreateUserRequestWithOrgs true "Create user request"
 // @Success 201 {object} codersdk.User
-// @Router /users [post]
+// @Router /api/v2/users [post]
 func (api *API) postUser(rw http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	auditor := *api.Auditor.Load()
@@ -356,7 +449,41 @@ func (api *API) postUser(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.UserLoginType == "" {
+	// Service accounts must use login_type 'none' and have no password
+	// or email.
+	if req.ServiceAccount {
+		// The client can omit login type for a service account and it will be
+		// set for them below. But if they request the wrong one, we have to let
+		// them know.
+		if req.UserLoginType != "" && req.UserLoginType != codersdk.LoginTypeNone {
+			httpapi.Write(ctx, rw, http.StatusBadRequest, codersdk.Response{
+				Message: "Service accounts must use login type 'none'.",
+			})
+			return
+		}
+		if req.Password != "" {
+			httpapi.Write(ctx, rw, http.StatusBadRequest, codersdk.Response{
+				Message: "Password cannot be set for service accounts.",
+			})
+			return
+		}
+		if req.Email != "" {
+			httpapi.Write(ctx, rw, http.StatusBadRequest, codersdk.Response{
+				Message: "Email cannot be set for service accounts.",
+			})
+			return
+		}
+
+		req.UserLoginType = codersdk.LoginTypeNone
+
+		// Service accounts are a Premium feature.
+		if !api.Entitlements.Enabled(codersdk.FeatureServiceAccounts) {
+			httpapi.Write(ctx, rw, http.StatusForbidden, codersdk.Response{
+				Message: fmt.Sprintf("%s is a Premium feature. Contact sales!", codersdk.FeatureServiceAccounts.Humanize()),
+			})
+			return
+		}
+	} else if req.UserLoginType == "" {
 		// Default to password auth
 		req.UserLoginType = codersdk.LoginTypePassword
 	}
@@ -488,6 +615,7 @@ func (api *API) postUser(rw http.ResponseWriter, r *http.Request) {
 		CreateUserRequestWithOrgs: req,
 		LoginType:                 loginType,
 		accountCreatorName:        accountCreator.Name,
+		RBACRoles:                 req.Roles,
 	})
 
 	if dbauthz.IsNotAuthorizedError(err) {
@@ -511,7 +639,9 @@ func (api *API) postUser(rw http.ResponseWriter, r *http.Request) {
 		Users: []telemetry.User{telemetry.ConvertUser(user)},
 	})
 
-	httpapi.Write(ctx, rw, http.StatusCreated, db2sdk.User(user, req.OrganizationIDs))
+	sdkUser := db2sdk.User(user, req.OrganizationIDs)
+	api.enrichUserAISeat(ctx, &sdkUser)
+	httpapi.Write(ctx, rw, http.StatusCreated, sdkUser)
 }
 
 // @Summary Delete user
@@ -520,7 +650,7 @@ func (api *API) postUser(rw http.ResponseWriter, r *http.Request) {
 // @Tags Users
 // @Param user path string true "User ID, name, or me"
 // @Success 200
-// @Router /users/{user} [delete]
+// @Router /api/v2/users/{user} [delete]
 func (api *API) deleteUser(rw http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	auditor := *api.Auditor.Load()
@@ -626,7 +756,7 @@ func (api *API) deleteUser(rw http.ResponseWriter, r *http.Request) {
 // @Tags Users
 // @Param user path string true "User ID, username, or me"
 // @Success 200 {object} codersdk.User
-// @Router /users/{user} [get]
+// @Router /api/v2/users/{user} [get]
 func (api *API) userByName(rw http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := httpmw.UserParam(r)
@@ -639,7 +769,9 @@ func (api *API) userByName(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpapi.Write(ctx, rw, http.StatusOK, db2sdk.User(user, organizationIDs))
+	sdkUser := db2sdk.User(user, organizationIDs)
+	api.enrichUserAISeat(ctx, &sdkUser)
+	httpapi.Write(ctx, rw, http.StatusOK, sdkUser)
 }
 
 // Returns recent build parameters for the signed-in user.
@@ -652,7 +784,7 @@ func (api *API) userByName(rw http.ResponseWriter, r *http.Request) {
 // @Param user path string true "User ID, username, or me"
 // @Param template_id query string true "Template ID"
 // @Success 200 {array} codersdk.UserParameter
-// @Router /users/{user}/autofill-parameters [get]
+// @Router /api/v2/users/{user}/autofill-parameters [get]
 func (api *API) userAutofillParameters(rw http.ResponseWriter, r *http.Request) {
 	user := httpmw.UserParam(r)
 
@@ -703,7 +835,7 @@ func (api *API) userAutofillParameters(rw http.ResponseWriter, r *http.Request) 
 // @Tags Users
 // @Param user path string true "User ID, name, or me"
 // @Success 200 {object} codersdk.UserLoginType
-// @Router /users/{user}/login-type [get]
+// @Router /api/v2/users/{user}/login-type [get]
 func (*API) userLoginType(rw http.ResponseWriter, r *http.Request) {
 	var (
 		ctx  = r.Context()
@@ -733,7 +865,7 @@ func (*API) userLoginType(rw http.ResponseWriter, r *http.Request) {
 // @Param user path string true "User ID, name, or me"
 // @Param request body codersdk.UpdateUserProfileRequest true "Updated profile"
 // @Success 200 {object} codersdk.User
-// @Router /users/{user}/profile [put]
+// @Router /api/v2/users/{user}/profile [put]
 func (api *API) putUserProfile(rw http.ResponseWriter, r *http.Request) {
 	var (
 		ctx               = r.Context()
@@ -812,7 +944,9 @@ func (api *API) putUserProfile(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpapi.Write(ctx, rw, http.StatusOK, db2sdk.User(updatedUserProfile, organizationIDs))
+	sdkUser := db2sdk.User(updatedUserProfile, organizationIDs)
+	api.enrichUserAISeat(ctx, &sdkUser)
+	httpapi.Write(ctx, rw, http.StatusOK, sdkUser)
 }
 
 // @Summary Suspend user account
@@ -822,7 +956,7 @@ func (api *API) putUserProfile(rw http.ResponseWriter, r *http.Request) {
 // @Tags Users
 // @Param user path string true "User ID, name, or me"
 // @Success 200 {object} codersdk.User
-// @Router /users/{user}/status/suspend [put]
+// @Router /api/v2/users/{user}/status/suspend [put]
 func (api *API) putSuspendUserAccount() func(rw http.ResponseWriter, r *http.Request) {
 	return api.putUserStatus(database.UserStatusSuspended)
 }
@@ -834,7 +968,7 @@ func (api *API) putSuspendUserAccount() func(rw http.ResponseWriter, r *http.Req
 // @Tags Users
 // @Param user path string true "User ID, name, or me"
 // @Success 200 {object} codersdk.User
-// @Router /users/{user}/status/activate [put]
+// @Router /api/v2/users/{user}/status/activate [put]
 func (api *API) putActivateUserAccount() func(rw http.ResponseWriter, r *http.Request) {
 	return api.putUserStatus(database.UserStatusActive)
 }
@@ -885,9 +1019,10 @@ func (api *API) putUserStatus(status database.UserStatus) func(rw http.ResponseW
 		}
 
 		targetUser, err := api.Database.UpdateUserStatus(ctx, database.UpdateUserStatusParams{
-			ID:        user.ID,
-			Status:    status,
-			UpdatedAt: dbtime.Now(),
+			ID:         user.ID,
+			Status:     status,
+			UpdatedAt:  dbtime.Now(),
+			UserIsSeen: false,
 		})
 		if err != nil {
 			httpapi.Write(ctx, rw, http.StatusInternalServerError, codersdk.Response{
@@ -912,7 +1047,9 @@ func (api *API) putUserStatus(status database.UserStatus) func(rw http.ResponseW
 			return
 		}
 
-		httpapi.Write(ctx, rw, http.StatusOK, db2sdk.User(targetUser, organizations))
+		sdkUser := db2sdk.User(targetUser, organizations)
+		api.enrichUserAISeat(ctx, &sdkUser)
+		httpapi.Write(ctx, rw, http.StatusOK, sdkUser)
 	}
 }
 
@@ -980,7 +1117,7 @@ func (api *API) notifyUserStatusChanged(ctx context.Context, actingUserName stri
 // @Tags Users
 // @Param user path string true "User ID, name, or me"
 // @Success 200 {object} codersdk.UserAppearanceSettings
-// @Router /users/{user}/appearance [get]
+// @Router /api/v2/users/{user}/appearance [get]
 func (api *API) userAppearanceSettings(rw http.ResponseWriter, r *http.Request) {
 	var (
 		ctx  = r.Context()
@@ -1028,7 +1165,7 @@ func (api *API) userAppearanceSettings(rw http.ResponseWriter, r *http.Request) 
 // @Param user path string true "User ID, name, or me"
 // @Param request body codersdk.UpdateUserAppearanceSettingsRequest true "New appearance settings"
 // @Success 200 {object} codersdk.UserAppearanceSettings
-// @Router /users/{user}/appearance [put]
+// @Router /api/v2/users/{user}/appearance [put]
 func (api *API) putUserAppearanceSettings(rw http.ResponseWriter, r *http.Request) {
 	var (
 		ctx  = r.Context()
@@ -1077,6 +1214,143 @@ func (api *API) putUserAppearanceSettings(rw http.ResponseWriter, r *http.Reques
 	})
 }
 
+// @Summary Get user preference settings
+// @ID get-user-preference-settings
+// @Security CoderSessionToken
+// @Produce json
+// @Tags Users
+// @Param user path string true "User ID, name, or me"
+// @Success 200 {object} codersdk.UserPreferenceSettings
+// @Router /api/v2/users/{user}/preferences [get]
+func (api *API) userPreferenceSettings(rw http.ResponseWriter, r *http.Request) {
+	var (
+		ctx  = r.Context()
+		user = httpmw.UserParam(r)
+	)
+
+	taskAlertDismissed, err := api.Database.GetUserTaskNotificationAlertDismissed(ctx, user.ID)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			httpapi.Write(ctx, rw, http.StatusInternalServerError, codersdk.Response{
+				Message: "Error reading user preference settings.",
+				Detail:  err.Error(),
+			})
+			return
+		}
+	}
+
+	thinkingMode, err := api.Database.GetUserThinkingDisplayMode(ctx, user.ID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		httpapi.Write(ctx, rw, http.StatusInternalServerError, codersdk.Response{
+			Message: "Error reading user preference settings.",
+			Detail:  err.Error(),
+		})
+		return
+	}
+
+	httpapi.Write(ctx, rw, http.StatusOK, codersdk.UserPreferenceSettings{
+		TaskNotificationAlertDismissed: taskAlertDismissed,
+		ThinkingDisplayMode:            sanitizeThinkingDisplayMode(thinkingMode),
+	})
+}
+
+// @Summary Update user preference settings
+// @ID update-user-preference-settings
+// @Security CoderSessionToken
+// @Accept json
+// @Produce json
+// @Tags Users
+// @Param user path string true "User ID, name, or me"
+// @Param request body codersdk.UpdateUserPreferenceSettingsRequest true "New preference settings"
+// @Success 200 {object} codersdk.UserPreferenceSettings
+// @Router /api/v2/users/{user}/preferences [put]
+func (api *API) putUserPreferenceSettings(rw http.ResponseWriter, r *http.Request) {
+	var (
+		ctx  = r.Context()
+		user = httpmw.UserParam(r)
+	)
+
+	var params codersdk.UpdateUserPreferenceSettingsRequest
+	if !httpapi.Read(ctx, rw, r, &params) {
+		return
+	}
+
+	if params.ThinkingDisplayMode != "" &&
+		!slices.Contains(codersdk.ValidThinkingDisplayModes, params.ThinkingDisplayMode) {
+		httpapi.Write(ctx, rw, http.StatusBadRequest, codersdk.Response{
+			Message: "Invalid thinking display mode.",
+			Validations: []codersdk.ValidationError{
+				{Field: "thinking_display_mode", Detail: "must be one of: auto, preview, always_expanded, always_collapsed"},
+			},
+		})
+		return
+	}
+	var err error
+
+	var updatedTaskAlertDismissed bool
+	if params.TaskNotificationAlertDismissed != nil {
+		updatedTaskAlertDismissed, err = api.Database.UpdateUserTaskNotificationAlertDismissed(ctx, database.UpdateUserTaskNotificationAlertDismissedParams{
+			UserID:                         user.ID,
+			TaskNotificationAlertDismissed: *params.TaskNotificationAlertDismissed,
+		})
+		if err != nil {
+			httpapi.Write(ctx, rw, http.StatusInternalServerError, codersdk.Response{
+				Message: "Internal error updating user task notification alert dismissed.",
+				Detail:  err.Error(),
+			})
+			return
+		}
+	} else {
+		updatedTaskAlertDismissed, err = api.Database.GetUserTaskNotificationAlertDismissed(ctx, user.ID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			httpapi.Write(ctx, rw, http.StatusInternalServerError, codersdk.Response{
+				Message: "Error reading task notification alert dismissed.",
+				Detail:  err.Error(),
+			})
+			return
+		}
+	}
+
+	var resolvedThinkingMode codersdk.ThinkingDisplayMode
+	if params.ThinkingDisplayMode != "" {
+		updated, err := api.Database.UpdateUserThinkingDisplayMode(ctx, database.UpdateUserThinkingDisplayModeParams{
+			UserID:              user.ID,
+			ThinkingDisplayMode: string(params.ThinkingDisplayMode),
+		})
+		if err != nil {
+			httpapi.Write(ctx, rw, http.StatusInternalServerError, codersdk.Response{
+				Message: "Internal error updating thinking display mode.",
+				Detail:  err.Error(),
+			})
+			return
+		}
+		resolvedThinkingMode = codersdk.ThinkingDisplayMode(updated)
+	} else {
+		stored, err := api.Database.GetUserThinkingDisplayMode(ctx, user.ID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			httpapi.Write(ctx, rw, http.StatusInternalServerError, codersdk.Response{
+				Message: "Error reading thinking display mode.",
+				Detail:  err.Error(),
+			})
+			return
+		}
+		resolvedThinkingMode = sanitizeThinkingDisplayMode(stored)
+	}
+
+	httpapi.Write(ctx, rw, http.StatusOK, codersdk.UserPreferenceSettings{
+		TaskNotificationAlertDismissed: updatedTaskAlertDismissed,
+		ThinkingDisplayMode:            resolvedThinkingMode,
+	})
+}
+
+func sanitizeThinkingDisplayMode(raw string) codersdk.ThinkingDisplayMode {
+	mode := codersdk.ThinkingDisplayMode(raw)
+	if slices.Contains(codersdk.ValidThinkingDisplayModes, mode) {
+		return mode
+	}
+	return codersdk.ThinkingDisplayModeAuto
+}
+
 func isValidFontName(font codersdk.TerminalFontName) bool {
 	return slices.Contains(codersdk.TerminalFontNames, font)
 }
@@ -1089,7 +1363,7 @@ func isValidFontName(font codersdk.TerminalFontName) bool {
 // @Param user path string true "User ID, name, or me"
 // @Param request body codersdk.UpdateUserPasswordRequest true "Update password request"
 // @Success 204
-// @Router /users/{user}/password [put]
+// @Router /api/v2/users/{user}/password [put]
 func (api *API) putUserPassword(rw http.ResponseWriter, r *http.Request) {
 	var (
 		ctx               = r.Context()
@@ -1224,7 +1498,7 @@ func (api *API) putUserPassword(rw http.ResponseWriter, r *http.Request) {
 // @Tags Users
 // @Param user path string true "User ID, name, or me"
 // @Success 200 {object} codersdk.User
-// @Router /users/{user}/roles [get]
+// @Router /api/v2/users/{user}/roles [get]
 func (api *API) userRoles(rw http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := httpmw.UserParam(r)
@@ -1270,7 +1544,7 @@ func (api *API) userRoles(rw http.ResponseWriter, r *http.Request) {
 // @Param user path string true "User ID, name, or me"
 // @Param request body codersdk.UpdateRoles true "Update roles request"
 // @Success 200 {object} codersdk.User
-// @Router /users/{user}/roles [put]
+// @Router /api/v2/users/{user}/roles [put]
 func (api *API) putUserRoles(rw http.ResponseWriter, r *http.Request) {
 	var (
 		ctx = r.Context()
@@ -1333,7 +1607,9 @@ func (api *API) putUserRoles(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpapi.Write(ctx, rw, http.StatusOK, db2sdk.User(updatedUser, organizationIDs))
+	sdkUser := db2sdk.User(updatedUser, organizationIDs)
+	api.enrichUserAISeat(ctx, &sdkUser)
+	httpapi.Write(ctx, rw, http.StatusOK, sdkUser)
 }
 
 // Returns organizations the parameterized user has access to.
@@ -1345,7 +1621,7 @@ func (api *API) putUserRoles(rw http.ResponseWriter, r *http.Request) {
 // @Tags Users
 // @Param user path string true "User ID, name, or me"
 // @Success 200 {array} codersdk.Organization
-// @Router /users/{user}/organizations [get]
+// @Router /api/v2/users/{user}/organizations [get]
 func (api *API) organizationsByUser(rw http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := httpmw.UserParam(r)
@@ -1376,7 +1652,7 @@ func (api *API) organizationsByUser(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpapi.Write(ctx, rw, http.StatusOK, db2sdk.List(organizations, db2sdk.Organization))
+	httpapi.Write(ctx, rw, http.StatusOK, slice.List(organizations, db2sdk.Organization))
 }
 
 // @Summary Get organization by user and organization name
@@ -1387,7 +1663,7 @@ func (api *API) organizationsByUser(rw http.ResponseWriter, r *http.Request) {
 // @Param user path string true "User ID, name, or me"
 // @Param organizationname path string true "Organization name"
 // @Success 200 {object} codersdk.Organization
-// @Router /users/{user}/organizations/{organizationname} [get]
+// @Router /api/v2/users/{user}/organizations/{organizationname} [get]
 func (api *API) organizationByUserAndName(rw http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	organizationName := chi.URLParam(r, "organizationname")
@@ -1441,16 +1717,17 @@ func (api *API) CreateUser(ctx context.Context, store database.Store, req Create
 			status = string(*req.UserStatus)
 		}
 		params := database.InsertUserParams{
-			ID:             uuid.New(),
-			Email:          req.Email,
-			Username:       req.Username,
-			Name:           codersdk.NormalizeRealUsername(req.Name),
-			CreatedAt:      dbtime.Now(),
-			UpdatedAt:      dbtime.Now(),
-			HashedPassword: []byte{},
-			RBACRoles:      rbacRoles,
-			LoginType:      req.LoginType,
-			Status:         status,
+			ID:               uuid.New(),
+			Email:            req.Email,
+			Username:         req.Username,
+			Name:             codersdk.NormalizeRealUsername(req.Name),
+			CreatedAt:        dbtime.Now(),
+			UpdatedAt:        dbtime.Now(),
+			HashedPassword:   []byte{},
+			RBACRoles:        rbacRoles,
+			LoginType:        req.LoginType,
+			Status:           status,
+			IsServiceAccount: req.ServiceAccount,
 		}
 		// If a user signs up with OAuth, they can have no password!
 		if req.Password != "" {
@@ -1537,28 +1814,49 @@ func (api *API) CreateUser(ctx context.Context, store database.Store, req Create
 
 // findUserAdmins fetches all users with user admin permission including owners.
 func findUserAdmins(ctx context.Context, store database.Store) ([]database.GetUsersRow, error) {
-	// Notice: we can't scrape the user information in parallel as pq
-	// fails with: unexpected describe rows response: 'D'
-	owners, err := store.GetUsers(ctx, database.GetUsersParams{
-		RbacRole: []string{codersdk.RoleOwner},
+	userAdmins, err := store.GetUsers(ctx, database.GetUsersParams{
+		RbacRole: []string{codersdk.RoleOwner, codersdk.RoleUserAdmin},
 	})
 	if err != nil {
 		return nil, xerrors.Errorf("get owners: %w", err)
 	}
-	userAdmins, err := store.GetUsers(ctx, database.GetUsersParams{
-		RbacRole: []string{codersdk.RoleUserAdmin},
-	})
-	if err != nil {
-		return nil, xerrors.Errorf("get user admins: %w", err)
-	}
-	return append(owners, userAdmins...), nil
+	return userAdmins, nil
 }
 
-func convertUsers(users []database.User, organizationIDsByUserID map[uuid.UUID][]uuid.UUID) []codersdk.User {
+// enrichUserAISeat sets HasAISeat on the user when the feature is entitled.
+func (api *API) enrichUserAISeat(ctx context.Context, user *codersdk.User) {
+	if !api.Entitlements.Enabled(codersdk.FeatureAIGovernanceUserLimit) {
+		return
+	}
+
+	//nolint:gocritic // AI seat state is a system-level read gated by entitlement.
+	aiSeatUserIDs, err := api.Database.GetUserAISeatStates(
+		dbauthz.AsSystemRestricted(ctx),
+		[]uuid.UUID{user.ID},
+	)
+	if err != nil {
+		if !xerrors.Is(err, sql.ErrNoRows) {
+			api.Logger.Warn(
+				ctx,
+				"failed to fetch AI seat state for user",
+				slog.F("user_id", user.ID),
+				slog.Error(err),
+			)
+		}
+		return
+	}
+
+	user.HasAISeat = len(aiSeatUserIDs) > 0
+}
+
+func convertUsers(users []database.User, organizationIDsByUserID map[uuid.UUID][]uuid.UUID, aiSeatSet map[uuid.UUID]struct{}) []codersdk.User {
 	converted := make([]codersdk.User, 0, len(users))
 	for _, u := range users {
 		userOrganizationIDs := organizationIDsByUserID[u.ID]
-		converted = append(converted, db2sdk.User(u, userOrganizationIDs))
+		_, hasAISeat := aiSeatSet[u.ID]
+		convertedUser := db2sdk.User(u, userOrganizationIDs)
+		convertedUser.HasAISeat = hasAISeat
+		converted = append(converted, convertedUser)
 	}
 	return converted
 }
@@ -1608,6 +1906,6 @@ func convertAPIKey(k database.APIKey) codersdk.APIKey {
 		Scopes:          scopes,
 		LifetimeSeconds: k.LifetimeSeconds,
 		TokenName:       k.TokenName,
-		AllowList:       db2sdk.List(k.AllowList, db2sdk.APIAllowListTarget),
+		AllowList:       slice.List(k.AllowList, db2sdk.APIAllowListTarget),
 	}
 }

@@ -1,3 +1,14 @@
+import type { Meta, StoryObj } from "@storybook/react-vite";
+import {
+	reactRouterOutlet,
+	reactRouterParameters,
+} from "storybook-addon-remix-react-router";
+import { getAuthorizationKey } from "#/api/queries/authCheck";
+import { workspaceByOwnerAndNameKey } from "#/api/queries/workspaces";
+import type { Workspace, WorkspaceAgentLifecycle } from "#/api/typesGenerated";
+import { AuthProvider } from "#/contexts/auth/AuthProvider";
+import { RequireAuth } from "#/contexts/auth/RequireAuth";
+import { permissionChecks } from "#/modules/permissions";
 import {
 	MockAppearanceConfig,
 	MockAuthMethodsAll,
@@ -10,19 +21,8 @@ import {
 	MockUserOwner,
 	MockWorkspace,
 	MockWorkspaceAgent,
-} from "testHelpers/entities";
-import { withWebSocket } from "testHelpers/storybook";
-import type { Meta, StoryObj } from "@storybook/react-vite";
-import { getAuthorizationKey } from "api/queries/authCheck";
-import { workspaceByOwnerAndNameKey } from "api/queries/workspaces";
-import type { Workspace, WorkspaceAgentLifecycle } from "api/typesGenerated";
-import { AuthProvider } from "contexts/auth/AuthProvider";
-import { RequireAuth } from "contexts/auth/RequireAuth";
-import { permissionChecks } from "modules/permissions";
-import {
-	reactRouterOutlet,
-	reactRouterParameters,
-} from "storybook-addon-remix-react-router";
+} from "#/testHelpers/entities";
+import { withWebSocket } from "#/testHelpers/storybook";
 import TerminalPage from "./TerminalPage";
 
 const createWorkspaceWithAgent = (lifecycle: WorkspaceAgentLifecycle) => {
@@ -199,12 +199,10 @@ export const ConnectionError: Story = {
 // together with the error message
 export const BottomMessage: Story = {
 	decorators: [withWebSocket],
+
 	parameters: {
 		...meta.parameters,
-		// Forcing smaller viewport to make it easier to identify the issue
-		viewport: {
-			defaultViewport: "terminal",
-		},
+
 		webSocket: [
 			{
 				event: "message",
@@ -213,6 +211,45 @@ export const BottomMessage: Story = {
 			},
 			{
 				event: "close",
+			},
+		],
+
+		queries: [...meta.parameters.queries, createWorkspaceWithAgent("ready")],
+	},
+
+	globals: {
+		viewport: {
+			value: "terminal",
+			isRotated: false,
+		},
+	},
+};
+
+export const CommandConfirmation: Story = {
+	decorators: [withWebSocket],
+	parameters: {
+		...meta.parameters,
+		reactRouter: reactRouterParameters({
+			location: {
+				pathParams: {
+					username: `@${MockWorkspace.owner_name}`,
+					workspace: MockWorkspace.name,
+				},
+				searchParams: {
+					command: "curl https://example.com/install.sh | bash",
+				},
+			},
+			routing: reactRouterOutlet(
+				{
+					path: "/:username/:workspace/terminal",
+				},
+				<TerminalPage />,
+			),
+		}),
+		webSocket: [
+			{
+				event: "message",
+				data: "\x1b[H\x1b[2J\x1b[1m\x1b[32m\u27a4  \x1b[36mcoder\x1b[C\x1b[34mgit:(\x1b[31mbq/refactor-web-term-notifications\x1b[34m) \x1b[33m\u2717",
 			},
 		],
 		queries: [...meta.parameters.queries, createWorkspaceWithAgent("ready")],

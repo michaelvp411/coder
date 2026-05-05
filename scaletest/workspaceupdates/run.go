@@ -9,10 +9,8 @@ import (
 
 	"golang.org/x/xerrors"
 
-	"github.com/coder/websocket"
-
-	"cdr.dev/slog"
-	"cdr.dev/slog/sloggers/sloghuman"
+	"cdr.dev/slog/v3"
+	"cdr.dev/slog/v3/sloggers/sloghuman"
 	"github.com/coder/coder/v2/coderd/tracing"
 	"github.com/coder/coder/v2/codersdk"
 	"github.com/coder/coder/v2/codersdk/workspacesdk"
@@ -22,6 +20,7 @@ import (
 	"github.com/coder/coder/v2/scaletest/workspacebuild"
 	"github.com/coder/coder/v2/tailnet"
 	tailnetproto "github.com/coder/coder/v2/tailnet/proto"
+	"github.com/coder/websocket"
 )
 
 type Runner struct {
@@ -76,10 +75,18 @@ func (r *Runner) Run(ctx context.Context, id string, logs io.Writer) error {
 		return xerrors.Errorf("create user: %w", err)
 	}
 	newUser := newUserAndToken.User
-	newUserClient := codersdk.New(r.client.URL,
-		codersdk.WithSessionToken(newUserAndToken.SessionToken),
-		codersdk.WithLogger(logger),
-		codersdk.WithLogBodies())
+	// Create a user client with an independent HTTP transport cloned from the
+	// runner's client. Using codersdk.New directly would inherit
+	// http.DefaultTransport, which is shared across all runners. That causes
+	// all user WebSocket connections to reuse the same TCP connection pool and
+	// land on the same coderd replica, concentrating load.
+	newUserClient, err := loadtestutil.DupClientCopyingHeaders(r.client, nil)
+	if err != nil {
+		return xerrors.Errorf("create user client: %w", err)
+	}
+	newUserClient.SetSessionToken(newUserAndToken.SessionToken)
+	newUserClient.SetLogger(logger)
+	newUserClient.SetLogBodies(true)
 
 	logger.Info(ctx, fmt.Sprintf("user %q created", newUser.Username), slog.F("id", newUser.ID.String()))
 
@@ -116,6 +123,10 @@ func (r *Runner) Run(ctx context.Context, id string, logs io.Writer) error {
 		workspaceBuildConfig.OrganizationID = r.cfg.User.OrganizationID
 		workspaceBuildConfig.UserID = newUser.ID.String()
 		workspaceBuildConfig.Request.Name = workspaceName
+		// We'll watch for completion ourselves via the tailnet workspace
+		// updates stream.
+		workspaceBuildConfig.NoWaitForAgents = true
+		workspaceBuildConfig.NoWaitForBuild = true
 
 		runner := workspacebuild.NewRunner(newUserClient, workspaceBuildConfig)
 		r.workspacebuildRunners = append(r.workspacebuildRunners, runner)

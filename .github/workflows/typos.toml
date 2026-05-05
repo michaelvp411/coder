@@ -9,6 +9,7 @@ IST = "IST"
 MacOS = "macOS"
 AKS = "AKS"
 O_WRONLY = "O_WRONLY"
+AIBridge = "AI Bridge"
 
 [default.extend-words]
 AKS = "AKS"
@@ -28,8 +29,14 @@ EDE = "EDE"
 HELO = "HELO"
 LKE = "LKE"
 byt = "byt"
+cpy = "cpy"
+Cpy = "Cpy"
 typ = "typ"
+# file extensions used in seti icon theme
+styl = "styl"
+edn = "edn"
 Inferrable = "Inferrable"
+IIF = "IIF"
 
 [files]
 extend-exclude = [
@@ -50,4 +57,6 @@ extend-exclude = [
 	# notifications' golden files confuse the detector because of quoted-printable encoding
 	"coderd/notifications/testdata/**",
 	"agent/agentcontainers/testdata/devcontainercli/**",
+	# aibridge fixtures contain truncated streaming chunks that look like typos
+	"aibridge/fixtures/**",
 ]

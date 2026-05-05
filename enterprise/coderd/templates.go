@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/xerrors"
 
+	"cdr.dev/slog/v3"
 	"github.com/coder/coder/v2/coderd/audit"
 	"github.com/coder/coder/v2/coderd/database"
 	"github.com/coder/coder/v2/coderd/database/db2sdk"
@@ -27,7 +28,7 @@ import (
 // @Tags Enterprise
 // @Param template path string true "Template ID" format(uuid)
 // @Success 200 {array} codersdk.ACLAvailable
-// @Router /templates/{template}/acl/available [get]
+// @Router /api/v2/templates/{template}/acl/available [get]
 func (api *API) templateAvailablePermissions(rw http.ResponseWriter, r *http.Request) {
 	var (
 		ctx      = r.Context()
@@ -100,7 +101,7 @@ func (api *API) templateAvailablePermissions(rw http.ResponseWriter, r *http.Req
 // @Tags Enterprise
 // @Param template path string true "Template ID" format(uuid)
 // @Success 200 {object} codersdk.TemplateACL
-// @Router /templates/{template}/acl [get]
+// @Router /api/v2/templates/{template}/acl [get]
 func (api *API) templateACL(rw http.ResponseWriter, r *http.Request) {
 	var (
 		ctx      = r.Context()
@@ -186,7 +187,7 @@ func (api *API) templateACL(rw http.ResponseWriter, r *http.Request) {
 // @Param template path string true "Template ID" format(uuid)
 // @Param request body codersdk.UpdateTemplateACL true "Update template ACL request"
 // @Success 200 {object} codersdk.Response
-// @Router /templates/{template}/acl [patch]
+// @Router /api/v2/templates/{template}/acl [patch]
 func (api *API) patchTemplateACL(rw http.ResponseWriter, r *http.Request) {
 	var (
 		ctx               = r.Context()
@@ -337,4 +338,51 @@ func (api *API) RequireFeatureMW(feat codersdk.FeatureName) func(http.Handler) h
 			next.ServeHTTP(rw, r)
 		})
 	}
+}
+
+// @Summary Invalidate presets for template
+// @ID invalidate-presets-for-template
+// @Security CoderSessionToken
+// @Produce json
+// @Tags Enterprise
+// @Param template path string true "Template ID" format(uuid)
+// @Success 200 {object} codersdk.InvalidatePresetsResponse
+// @Router /api/v2/templates/{template}/prebuilds/invalidate [post]
+func (api *API) postInvalidateTemplatePresets(rw http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	template := httpmw.TemplateParam(r)
+
+	// Authorization: user must be able to update the template
+	if !api.Authorize(r, policy.ActionUpdate, template) {
+		httpapi.ResourceNotFound(rw)
+		return
+	}
+
+	// Update last_invalidated_at for all presets of the active template version
+	invalidatedPresets, err := api.Database.UpdatePresetsLastInvalidatedAt(ctx, database.UpdatePresetsLastInvalidatedAtParams{
+		TemplateID:        template.ID,
+		LastInvalidatedAt: sql.NullTime{Time: api.Clock.Now(), Valid: true},
+	})
+	if err != nil {
+		httpapi.Write(ctx, rw, http.StatusInternalServerError, codersdk.Response{
+			Message: "Failed to invalidate presets.",
+			Detail:  err.Error(),
+		})
+		return
+	}
+
+	api.Logger.Info(ctx, "invalidated presets",
+		slog.F("template_id", template.ID),
+		slog.F("template_name", template.Name),
+		slog.F("preset_count", len(invalidatedPresets)),
+	)
+
+	invalidated := db2sdk.InvalidatedPresets(invalidatedPresets)
+	if invalidated == nil {
+		invalidated = []codersdk.InvalidatedPreset{} // need to avoid nil value
+	}
+
+	httpapi.Write(ctx, rw, http.StatusOK, codersdk.InvalidatePresetsResponse{
+		Invalidated: invalidated,
+	})
 }

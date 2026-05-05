@@ -1,10 +1,9 @@
 import { css, type Interpolation, type Theme } from "@emotion/react";
 import CircularProgress from "@mui/material/CircularProgress";
-import IconButton from "@mui/material/IconButton";
-import { Stack } from "components/Stack/Stack";
-import { useClickable } from "hooks/useClickable";
 import { CloudUploadIcon, FolderIcon, TrashIcon } from "lucide-react";
 import { type DragEvent, type FC, type ReactNode, useRef } from "react";
+import { Button } from "#/components/Button/Button";
+import { useClickable } from "#/hooks/useClickable";
 
 interface FileUploadProps {
 	isUploading: boolean;
@@ -35,21 +34,24 @@ export const FileUpload: FC<FileUploadProps> = ({
 
 	if (!isUploading && file) {
 		return (
-			<Stack
+			<div
 				css={styles.file}
-				direction="row"
-				justifyContent="space-between"
-				alignItems="center"
+				className="flex flex-row justify-between items-center gap-4"
 			>
-				<Stack direction="row" alignItems="center">
+				<div className="flex flex-row items-center gap-4">
 					<FolderIcon className="size-icon-sm" />
 					<span>{file.name}</span>
-				</Stack>
+				</div>
 
-				<IconButton title={removeLabel} size="small" onClick={onRemove}>
+				<Button
+					variant="subtle"
+					size="icon-lg"
+					onClick={onRemove}
+					title={removeLabel}
+				>
 					<TrashIcon className="size-icon-sm" />
-				</IconButton>
-			</Stack>
+				</Button>
+			</div>
 		);
 	}
 
@@ -61,7 +63,7 @@ export const FileUpload: FC<FileUploadProps> = ({
 				{...clickable}
 				{...fileDrop}
 			>
-				<Stack alignItems="center" spacing={1}>
+				<div className="flex flex-col items-center gap-2">
 					<div css={styles.iconWrapper}>
 						{isUploading ? (
 							<CircularProgress size={32} />
@@ -70,11 +72,11 @@ export const FileUpload: FC<FileUploadProps> = ({
 						)}
 					</div>
 
-					<Stack alignItems="center" spacing={0.5}>
+					<div className="flex flex-col items-center gap-1">
 						<span css={styles.title}>{title}</span>
 						<span css={styles.description}>{description}</span>
-					</Stack>
-				</Stack>
+					</div>
+				</div>
 			</div>
 
 			<input
@@ -137,18 +139,18 @@ const useFileDrop = (
 
 const styles = {
 	root: (theme) => css`
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 8px;
-    border: 2px dashed ${theme.palette.divider};
-    padding: 48px;
-    cursor: pointer;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		border-radius: 8px;
+		border: 2px dashed ${theme.palette.divider};
+		padding: 48px;
+		cursor: pointer;
 
-    &:hover {
-      background-color: ${theme.palette.background.paper};
-    }
-  `,
+		&:hover {
+			background-color: ${theme.palette.background.paper};
+		}
+	`,
 
 	disabled: {
 		pointerEvents: "none",

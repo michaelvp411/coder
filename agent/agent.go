@@ -3,11 +3,13 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/netip"
@@ -15,7 +17,6 @@ import (
 	"os/user"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,21 +30,30 @@ import (
 	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/xerrors"
+	googleproto "google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"tailscale.com/net/speedtest"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/netlogtype"
 	"tailscale.com/util/clientmetric"
 
-	"cdr.dev/slog"
+	"cdr.dev/slog/v3"
 	"github.com/coder/clistat"
 	"github.com/coder/coder/v2/agent/agentcontainers"
+	"github.com/coder/coder/v2/agent/agentcontextconfig"
 	"github.com/coder/coder/v2/agent/agentexec"
+	"github.com/coder/coder/v2/agent/agentfiles"
+	"github.com/coder/coder/v2/agent/agentgit"
+	"github.com/coder/coder/v2/agent/agentproc"
 	"github.com/coder/coder/v2/agent/agentscripts"
+	"github.com/coder/coder/v2/agent/agentsocket"
 	"github.com/coder/coder/v2/agent/agentssh"
+	"github.com/coder/coder/v2/agent/boundarylogproxy"
 	"github.com/coder/coder/v2/agent/proto"
 	"github.com/coder/coder/v2/agent/proto/resourcesmonitor"
 	"github.com/coder/coder/v2/agent/reconnectingpty"
+	"github.com/coder/coder/v2/agent/x/agentdesktop"
+	"github.com/coder/coder/v2/agent/x/agentmcp"
 	"github.com/coder/coder/v2/buildinfo"
 	"github.com/coder/coder/v2/cli/gitauth"
 	"github.com/coder/coder/v2/coderd/database/dbtime"
@@ -69,17 +79,24 @@ const (
 	EnvProcOOMScore = "CODER_PROC_OOM_SCORE"
 )
 
+var ErrAgentClosing = xerrors.New("agent is closing")
+
 type Options struct {
-	Filesystem                   afero.Fs
-	LogDir                       string
-	TempDir                      string
-	ScriptDataDir                string
-	Client                       Client
-	ReconnectingPTYTimeout       time.Duration
-	EnvironmentVariables         map[string]string
-	Logger                       slog.Logger
-	IgnorePorts                  map[int]string
-	PortCacheDuration            time.Duration
+	Filesystem             afero.Fs
+	LogDir                 string
+	TempDir                string
+	ScriptDataDir          string
+	Client                 Client
+	ReconnectingPTYTimeout time.Duration
+	EnvironmentVariables   map[string]string
+	Logger                 slog.Logger
+	// IgnorePorts tells the api handler which ports to ignore when
+	// listing all listening ports. This is helpful to hide ports that
+	// are used by the agent, that the user does not care about.
+	IgnorePorts map[int]string
+	// ListeningPortsGetter is used to get the list of listening ports. Only
+	// tests should set this. If unset, a default that queries the OS will be used.
+	ListeningPortsGetter         ListeningPortsGetter
 	SSHMaxTimeout                time.Duration
 	TailnetListenPort            uint16
 	Subsystems                   []codersdk.AgentSubsystem
@@ -87,15 +104,30 @@ type Options struct {
 	ReportMetadataInterval       time.Duration
 	ServiceBannerRefreshInterval time.Duration
 	BlockFileTransfer            bool
+	BlockReversePortForwarding   bool
+	BlockLocalPortForwarding     bool
 	Execer                       agentexec.Execer
 	Devcontainers                bool
 	DevcontainerAPIOptions       []agentcontainers.Option // Enable Devcontainers for these to be effective.
+	GitAPIOptions                []agentgit.Option
 	Clock                        quartz.Clock
+	SocketServerEnabled          bool
+	SocketPath                   string // Path for the agent socket server socket
+	BoundaryLogProxySocketPath   string
+	ContextConfig                agentcontextconfig.Config
+	// DERPTLSConfig is an optional TLS config for DERP connections.
+	DERPTLSConfig *tls.Config
 }
 
 type Client interface {
-	ConnectRPC26(ctx context.Context) (
-		proto.DRPCAgentClient26, tailnetproto.DRPCTailnetClient26, error,
+	ConnectRPC29(ctx context.Context) (
+		proto.DRPCAgentClient29, tailnetproto.DRPCTailnetClient28, error,
+	)
+	// ConnectRPC29WithRole is like ConnectRPC29 but sends an explicit
+	// role query parameter to the server. The workspace agent should
+	// use role "agent" to enable connection monitoring.
+	ConnectRPC29WithRole(ctx context.Context, role string) (
+		proto.DRPCAgentClient29, tailnetproto.DRPCTailnetClient28, error,
 	)
 	tailnet.DERPMapRewriter
 	agentsdk.RefreshableSessionTokenProvider
@@ -137,9 +169,7 @@ func New(options Options) Agent {
 	if options.ServiceBannerRefreshInterval == 0 {
 		options.ServiceBannerRefreshInterval = 2 * time.Minute
 	}
-	if options.PortCacheDuration == 0 {
-		options.PortCacheDuration = 1 * time.Second
-	}
+
 	if options.Clock == nil {
 		options.Clock = quartz.NewReal()
 	}
@@ -153,43 +183,59 @@ func New(options Options) Agent {
 		options.Execer = agentexec.DefaultExecer
 	}
 
+	if options.ListeningPortsGetter == nil {
+		options.ListeningPortsGetter = &osListeningPortsGetter{
+			cacheDuration: 1 * time.Second,
+		}
+	}
+
 	hardCtx, hardCancel := context.WithCancel(context.Background())
 	gracefulCtx, gracefulCancel := context.WithCancel(hardCtx)
 	a := &agent{
-		clock:                              options.Clock,
-		tailnetListenPort:                  options.TailnetListenPort,
-		reconnectingPTYTimeout:             options.ReconnectingPTYTimeout,
-		logger:                             options.Logger,
-		gracefulCtx:                        gracefulCtx,
-		gracefulCancel:                     gracefulCancel,
-		hardCtx:                            hardCtx,
-		hardCancel:                         hardCancel,
-		coordDisconnected:                  make(chan struct{}),
-		environmentVariables:               options.EnvironmentVariables,
-		client:                             options.Client,
-		filesystem:                         options.Filesystem,
-		logDir:                             options.LogDir,
-		tempDir:                            options.TempDir,
-		scriptDataDir:                      options.ScriptDataDir,
-		lifecycleUpdate:                    make(chan struct{}, 1),
-		lifecycleReported:                  make(chan codersdk.WorkspaceAgentLifecycle, 1),
-		lifecycleStates:                    []agentsdk.PostLifecycleRequest{{State: codersdk.WorkspaceAgentLifecycleCreated}},
-		reportConnectionsUpdate:            make(chan struct{}, 1),
-		ignorePorts:                        options.IgnorePorts,
-		portCacheDuration:                  options.PortCacheDuration,
+		clock:                   options.Clock,
+		tailnetListenPort:       options.TailnetListenPort,
+		reconnectingPTYTimeout:  options.ReconnectingPTYTimeout,
+		logger:                  options.Logger,
+		gracefulCtx:             gracefulCtx,
+		gracefulCancel:          gracefulCancel,
+		hardCtx:                 hardCtx,
+		hardCancel:              hardCancel,
+		coordDisconnected:       make(chan struct{}),
+		environmentVariables:    options.EnvironmentVariables,
+		client:                  options.Client,
+		filesystem:              options.Filesystem,
+		logDir:                  options.LogDir,
+		tempDir:                 options.TempDir,
+		scriptDataDir:           options.ScriptDataDir,
+		lifecycleUpdate:         make(chan struct{}, 1),
+		lifecycleReported:       make(chan codersdk.WorkspaceAgentLifecycle, 1),
+		lifecycleStates:         []agentsdk.PostLifecycleRequest{{State: codersdk.WorkspaceAgentLifecycleCreated}},
+		reportConnectionsUpdate: make(chan struct{}, 1),
+		listeningPortsHandler: listeningPortsHandler{
+			getter:      options.ListeningPortsGetter,
+			ignorePorts: maps.Clone(options.IgnorePorts),
+		},
 		reportMetadataInterval:             options.ReportMetadataInterval,
 		announcementBannersRefreshInterval: options.ServiceBannerRefreshInterval,
 		sshMaxTimeout:                      options.SSHMaxTimeout,
 		subsystems:                         options.Subsystems,
 		logSender:                          agentsdk.NewLogSender(options.Logger),
 		blockFileTransfer:                  options.BlockFileTransfer,
+		blockReversePortForwarding:         options.BlockReversePortForwarding,
+		blockLocalPortForwarding:           options.BlockLocalPortForwarding,
 
 		prometheusRegistry: prometheusRegistry,
 		metrics:            newAgentMetrics(prometheusRegistry),
 		execer:             options.Execer,
 
-		devcontainers:       options.Devcontainers,
-		containerAPIOptions: options.DevcontainerAPIOptions,
+		devcontainers:              options.Devcontainers,
+		containerAPIOptions:        options.DevcontainerAPIOptions,
+		gitAPIOptions:              options.GitAPIOptions,
+		socketPath:                 options.SocketPath,
+		socketServerEnabled:        options.SocketServerEnabled,
+		boundaryLogProxySocketPath: options.BoundaryLogProxySocketPath,
+		contextConfig:              options.ContextConfig,
+		derpTLSConfig:              options.DERPTLSConfig,
 	}
 	// Initially, we have a closed channel, reflecting the fact that we are not initially connected.
 	// Each time we connect we replace the channel (while holding the closeMutex) with a new one
@@ -202,20 +248,16 @@ func New(options Options) Agent {
 }
 
 type agent struct {
-	clock             quartz.Clock
-	logger            slog.Logger
-	client            Client
-	tailnetListenPort uint16
-	filesystem        afero.Fs
-	logDir            string
-	tempDir           string
-	scriptDataDir     string
-	// ignorePorts tells the api handler which ports to ignore when
-	// listing all listening ports. This is helpful to hide ports that
-	// are used by the agent, that the user does not care about.
-	ignorePorts       map[int]string
-	portCacheDuration time.Duration
-	subsystems        []codersdk.AgentSubsystem
+	clock                 quartz.Clock
+	logger                slog.Logger
+	client                Client
+	tailnetListenPort     uint16
+	filesystem            afero.Fs
+	logDir                string
+	tempDir               string
+	scriptDataDir         string
+	listeningPortsHandler listeningPortsHandler
+	subsystems            []codersdk.AgentSubsystem
 
 	reconnectingPTYTimeout time.Duration
 	reconnectingPTYServer  *reconnectingpty.Server
@@ -241,7 +283,11 @@ type agent struct {
 
 	environmentVariables map[string]string
 
-	manifest                           atomic.Pointer[agentsdk.Manifest] // manifest is atomic because values can change after reconnection.
+	manifest atomic.Pointer[agentsdk.Manifest] // manifest is atomic because values can change after reconnection.
+	// secrets are held separately from the manifest so that code paths that
+	// only need manifest data cannot accidentally access or leak secret
+	// values. Callers that need secrets must explicitly load this.
+	secrets                            atomic.Pointer[[]agentsdk.WorkspaceSecret]
 	reportMetadataInterval             time.Duration
 	scriptRunner                       *agentscripts.Runner
 	announcementBanners                atomic.Pointer[[]codersdk.BannerConfig] // announcementBanners is atomic because it is periodically updated.
@@ -249,6 +295,8 @@ type agent struct {
 	sshServer                          *agentssh.Server
 	sshMaxTimeout                      time.Duration
 	blockFileTransfer                  bool
+	blockReversePortForwarding         bool
+	blockLocalPortForwarding           bool
 
 	lifecycleUpdate            chan struct{}
 	lifecycleReported          chan codersdk.WorkspaceAgentLifecycle
@@ -262,6 +310,12 @@ type agent struct {
 
 	logSender *agentsdk.LogSender
 
+	// boundaryLogProxy is a socket server that forwards boundary audit logs to coderd.
+	// It may be nil if there is a problem starting the server.
+	boundaryLogProxy           *boundarylogproxy.Server
+	boundaryLogProxySocketPath string
+	contextConfig              agentcontextconfig.Config
+
 	prometheusRegistry *prometheus.Registry
 	// metrics are prometheus registered metrics that will be collected and
 	// labeled in Coder with the agent + workspace.
@@ -271,6 +325,21 @@ type agent struct {
 	devcontainers       bool
 	containerAPIOptions []agentcontainers.Option
 	containerAPI        *agentcontainers.API
+	gitAPIOptions       []agentgit.Option
+
+	filesAPI         *agentfiles.API
+	gitAPI           *agentgit.API
+	processAPI       *agentproc.API
+	desktopAPI       *agentdesktop.API
+	mcpManager       *agentmcp.Manager
+	mcpAPI           *agentmcp.API
+	contextConfigAPI *agentcontextconfig.API
+
+	socketServerEnabled bool
+	socketPath          string
+	socketServer        *agentsocket.Server
+
+	derpTLSConfig *tls.Config
 }
 
 func (a *agent) TailnetConn() *tailnet.Conn {
@@ -282,12 +351,14 @@ func (a *agent) TailnetConn() *tailnet.Conn {
 func (a *agent) init() {
 	// pass the "hard" context because we explicitly close the SSH server as part of graceful shutdown.
 	sshSrv, err := agentssh.NewServer(a.hardCtx, a.logger.Named("ssh-server"), a.prometheusRegistry, a.filesystem, a.execer, &agentssh.Config{
-		MaxTimeout:          a.sshMaxTimeout,
-		MOTDFile:            func() string { return a.manifest.Load().MOTDFile },
-		AnnouncementBanners: func() *[]codersdk.BannerConfig { return a.announcementBanners.Load() },
-		UpdateEnv:           a.updateCommandEnv,
-		WorkingDirectory:    func() string { return a.manifest.Load().Directory },
-		BlockFileTransfer:   a.blockFileTransfer,
+		MaxTimeout:                 a.sshMaxTimeout,
+		MOTDFile:                   func() string { return a.manifest.Load().MOTDFile },
+		AnnouncementBanners:        func() *[]codersdk.BannerConfig { return a.announcementBanners.Load() },
+		UpdateEnv:                  a.updateCommandEnv,
+		WorkingDirectory:           func() string { return a.manifest.Load().Directory },
+		BlockFileTransfer:          a.blockFileTransfer,
+		BlockReversePortForwarding: a.blockReversePortForwarding,
+		BlockLocalPortForwarding:   a.blockLocalPortForwarding,
 		ReportConnection: func(id uuid.UUID, magicType agentssh.MagicSessionType, ip string) func(code int, reason string) {
 			var connectionType proto.Connection_Type
 			switch magicType {
@@ -338,6 +409,28 @@ func (a *agent) init() {
 
 	a.containerAPI = agentcontainers.NewAPI(a.logger.Named("containers"), containerAPIOpts...)
 
+	pathStore := agentgit.NewPathStore()
+	a.filesAPI = agentfiles.NewAPI(a.logger.Named("files"), a.filesystem, pathStore)
+	a.processAPI = agentproc.NewAPI(a.logger.Named("processes"), a.execer, a.updateCommandEnv, pathStore, func() string {
+		if m := a.manifest.Load(); m != nil {
+			return m.Directory
+		}
+		return ""
+	})
+	gitOpts := append([]agentgit.Option{agentgit.WithClock(a.clock)}, a.gitAPIOptions...)
+	a.gitAPI = agentgit.NewAPI(a.logger.Named("git"), pathStore, gitOpts...)
+	desktop := agentdesktop.NewPortableDesktop(
+		a.logger.Named("desktop"), a.execer, a.scriptRunner.ScriptBinDir(), nil,
+	)
+	a.desktopAPI = agentdesktop.NewAPI(a.logger.Named("desktop"), desktop, a.clock)
+	a.mcpManager = agentmcp.NewManager(a.gracefulCtx, a.logger.Named("mcp"), a.execer, a.updateCommandEnv)
+	a.contextConfigAPI = agentcontextconfig.NewAPI(func() string {
+		if m := a.manifest.Load(); m != nil {
+			return m.Directory
+		}
+		return ""
+	}, a.contextConfig)
+	a.mcpAPI = agentmcp.NewAPI(a.logger.Named("mcp"), a.mcpManager, a.contextConfigAPI.MCPConfigFiles)
 	a.reconnectingPTYServer = reconnectingpty.NewServer(
 		a.logger.Named("reconnecting-pty"),
 		a.sshServer,
@@ -350,7 +443,49 @@ func (a *agent) init() {
 			s.ExperimentalContainers = a.devcontainers
 		},
 	)
+
+	a.initSocketServer()
+	a.startBoundaryLogProxyServer()
+
 	go a.runLoop()
+}
+
+// initSocketServer initializes server that allows direct communication with a workspace agent using IPC.
+func (a *agent) initSocketServer() {
+	if !a.socketServerEnabled {
+		a.logger.Info(a.hardCtx, "socket server is disabled")
+		return
+	}
+
+	server, err := agentsocket.NewServer(
+		a.logger.Named("socket"),
+		agentsocket.WithPath(a.socketPath),
+	)
+	if err != nil {
+		a.logger.Error(a.hardCtx, "failed to create socket server", slog.Error(err), slog.F("path", a.socketPath))
+		return
+	}
+
+	a.socketServer = server
+	a.logger.Debug(a.hardCtx, "socket server started", slog.F("path", a.socketPath))
+}
+
+// startBoundaryLogProxyServer starts the boundary log proxy socket server.
+func (a *agent) startBoundaryLogProxyServer() {
+	if a.boundaryLogProxySocketPath == "" {
+		a.logger.Warn(a.hardCtx, "boundary log proxy socket path not defined; not starting proxy")
+		return
+	}
+
+	proxy := boundarylogproxy.NewServer(a.logger, a.boundaryLogProxySocketPath, a.prometheusRegistry)
+	if err := proxy.Start(); err != nil {
+		a.logger.Warn(a.hardCtx, "failed to start boundary log proxy", slog.Error(err))
+		return
+	}
+
+	a.boundaryLogProxy = proxy
+	a.logger.Info(a.hardCtx, "boundary log proxy server started",
+		slog.F("socket_path", a.boundaryLogProxySocketPath))
 }
 
 // runLoop attempts to start the agent in a retry loop.
@@ -361,6 +496,7 @@ func (a *agent) runLoop() {
 	// need to keep retrying up to the hardCtx so that we can send graceful shutdown-related
 	// messages.
 	ctx := a.hardCtx
+	defer a.logger.Info(ctx, "agent main loop exited")
 	for retrier := retry.New(100*time.Millisecond, 10*time.Second); retrier.Wait(ctx); {
 		a.logger.Info(ctx, "connecting to coderd")
 		err := a.run()
@@ -463,7 +599,7 @@ func (t *trySingleflight) Do(key string, fn func()) {
 	fn()
 }
 
-func (a *agent) reportMetadata(ctx context.Context, aAPI proto.DRPCAgentClient26) error {
+func (a *agent) reportMetadata(ctx context.Context, aAPI proto.DRPCAgentClient28) error {
 	tickerDone := make(chan struct{})
 	collectDone := make(chan struct{})
 	ctx, cancel := context.WithCancel(ctx)
@@ -678,7 +814,7 @@ func (a *agent) reportMetadata(ctx context.Context, aAPI proto.DRPCAgentClient26
 
 // reportLifecycle reports the current lifecycle state once. All state
 // changes are reported in order.
-func (a *agent) reportLifecycle(ctx context.Context, aAPI proto.DRPCAgentClient26) error {
+func (a *agent) reportLifecycle(ctx context.Context, aAPI proto.DRPCAgentClient28) error {
 	for {
 		select {
 		case <-a.lifecycleUpdate:
@@ -758,7 +894,7 @@ func (a *agent) setLifecycle(state codersdk.WorkspaceAgentLifecycle) {
 }
 
 // reportConnectionsLoop reports connections to the agent for auditing.
-func (a *agent) reportConnectionsLoop(ctx context.Context, aAPI proto.DRPCAgentClient26) error {
+func (a *agent) reportConnectionsLoop(ctx context.Context, aAPI proto.DRPCAgentClient28) error {
 	for {
 		select {
 		case <-a.reportConnectionsUpdate:
@@ -812,12 +948,16 @@ const (
 )
 
 func (a *agent) reportConnection(id uuid.UUID, connectionType proto.Connection_Type, ip string) (disconnected func(code int, reason string)) {
-	// Remove the port from the IP because ports are not supported in coderd.
-	if host, _, err := net.SplitHostPort(ip); err != nil {
-		a.logger.Error(a.hardCtx, "split host and port for connection report failed", slog.F("ip", ip), slog.Error(err))
-	} else {
-		// Best effort.
-		ip = host
+	// A blank IP can unfortunately happen if the connection is broken in a data race before we get to introspect it. We
+	// still report it, and the recipient can handle a blank IP.
+	if ip != "" {
+		// Remove the port from the IP because ports are not supported in coderd.
+		if host, _, err := net.SplitHostPort(ip); err != nil {
+			a.logger.Error(a.hardCtx, "split host and port for connection report failed", slog.F("ip", ip), slog.Error(err))
+		} else {
+			// Best effort.
+			ip = host
+		}
 	}
 
 	// If the IP is "localhost" (which it can be in some cases), set it to
@@ -889,7 +1029,7 @@ func (a *agent) reportConnection(id uuid.UUID, connectionType proto.Connection_T
 // fetchServiceBannerLoop fetches the service banner on an interval.  It will
 // not be fetched immediately; the expectation is that it is primed elsewhere
 // (and must be done before the session actually starts).
-func (a *agent) fetchServiceBannerLoop(ctx context.Context, aAPI proto.DRPCAgentClient26) error {
+func (a *agent) fetchServiceBannerLoop(ctx context.Context, aAPI proto.DRPCAgentClient28) error {
 	ticker := time.NewTicker(a.announcementBannersRefreshInterval)
 	defer ticker.Stop()
 	for {
@@ -923,8 +1063,10 @@ func (a *agent) run() (retErr error) {
 		return xerrors.Errorf("refresh token: %w", err)
 	}
 
-	// ConnectRPC returns the dRPC connection we use for the Agent and Tailnet v2+ APIs
-	aAPI, tAPI, err := a.client.ConnectRPC26(a.hardCtx)
+	// ConnectRPC returns the dRPC connection we use for the Agent and Tailnet v2+ APIs.
+	// We pass role "agent" to enable connection monitoring on the server, which tracks
+	// the agent's connectivity state (first_connected_at, last_connected_at, disconnected_at).
+	aAPI, tAPI, err := a.client.ConnectRPC29WithRole(a.hardCtx, "agent")
 	if err != nil {
 		return err
 	}
@@ -935,13 +1077,20 @@ func (a *agent) run() (retErr error) {
 		}
 	}()
 
+	// The socket server accepts requests from processes running inside the workspace and forwards
+	// some of the requests to Coderd over the DRPC connection.
+	if a.socketServer != nil {
+		a.socketServer.SetAgentAPI(aAPI)
+		defer a.socketServer.ClearAgentAPI()
+	}
+
 	// A lot of routines need the agent API / tailnet API connection.  We run them in their own
 	// goroutines in parallel, but errors in any routine will cause them all to exit so we can
 	// redial the coder server and retry.
 	connMan := newAPIConnRoutineManager(a.gracefulCtx, a.hardCtx, a.logger, aAPI, tAPI)
 
 	connMan.startAgentAPI("init notification banners", gracefulShutdownBehaviorStop,
-		func(ctx context.Context, aAPI proto.DRPCAgentClient26) error {
+		func(ctx context.Context, aAPI proto.DRPCAgentClient28) error {
 			bannersProto, err := aAPI.GetAnnouncementBanners(ctx, &proto.GetAnnouncementBannersRequest{})
 			if err != nil {
 				return xerrors.Errorf("fetch service banner: %w", err)
@@ -958,7 +1107,7 @@ func (a *agent) run() (retErr error) {
 	// sending logs gets gracefulShutdownBehaviorRemain because we want to send logs generated by
 	// shutdown scripts.
 	connMan.startAgentAPI("send logs", gracefulShutdownBehaviorRemain,
-		func(ctx context.Context, aAPI proto.DRPCAgentClient26) error {
+		func(ctx context.Context, aAPI proto.DRPCAgentClient28) error {
 			err := a.logSender.SendLoop(ctx, aAPI)
 			if xerrors.Is(err, agentsdk.ErrLogLimitExceeded) {
 				// we don't want this error to tear down the API connection and propagate to the
@@ -969,6 +1118,15 @@ func (a *agent) run() (retErr error) {
 			return err
 		})
 
+	// Forward boundary audit logs to coderd if boundary log forwarding is enabled.
+	// These are audit logs so they should continue during graceful shutdown.
+	if a.boundaryLogProxy != nil {
+		proxyFunc := func(ctx context.Context, aAPI proto.DRPCAgentClient28) error {
+			return a.boundaryLogProxy.RunForwarder(ctx, aAPI)
+		}
+		connMan.startAgentAPI("boundary log proxy", gracefulShutdownBehaviorRemain, proxyFunc)
+	}
+
 	// part of graceful shut down is reporting the final lifecycle states, e.g "ShuttingDown" so the
 	// lifecycle reporting has to be via gracefulShutdownBehaviorRemain
 	connMan.startAgentAPI("report lifecycle", gracefulShutdownBehaviorRemain, a.reportLifecycle)
@@ -977,7 +1135,7 @@ func (a *agent) run() (retErr error) {
 	connMan.startAgentAPI("report metadata", gracefulShutdownBehaviorStop, a.reportMetadata)
 
 	// resources monitor can cease as soon as we start gracefully shutting down.
-	connMan.startAgentAPI("resources monitor", gracefulShutdownBehaviorStop, func(ctx context.Context, aAPI proto.DRPCAgentClient26) error {
+	connMan.startAgentAPI("resources monitor", gracefulShutdownBehaviorStop, func(ctx context.Context, aAPI proto.DRPCAgentClient28) error {
 		logger := a.logger.Named("resources_monitor")
 		clk := quartz.NewReal()
 		config, err := aAPI.GetResourcesMonitoringConfiguration(ctx, &proto.GetResourcesMonitoringConfigurationRequest{})
@@ -1024,7 +1182,7 @@ func (a *agent) run() (retErr error) {
 	connMan.startAgentAPI("handle manifest", gracefulShutdownBehaviorStop, a.handleManifest(manifestOK))
 
 	connMan.startAgentAPI("app health reporter", gracefulShutdownBehaviorStop,
-		func(ctx context.Context, aAPI proto.DRPCAgentClient26) error {
+		func(ctx context.Context, aAPI proto.DRPCAgentClient28) error {
 			if err := manifestOK.wait(ctx); err != nil {
 				return xerrors.Errorf("no manifest: %w", err)
 			}
@@ -1057,7 +1215,7 @@ func (a *agent) run() (retErr error) {
 
 	connMan.startAgentAPI("fetch service banner loop", gracefulShutdownBehaviorStop, a.fetchServiceBannerLoop)
 
-	connMan.startAgentAPI("stats report loop", gracefulShutdownBehaviorStop, func(ctx context.Context, aAPI proto.DRPCAgentClient26) error {
+	connMan.startAgentAPI("stats report loop", gracefulShutdownBehaviorStop, func(ctx context.Context, aAPI proto.DRPCAgentClient28) error {
 		if err := networkOK.wait(ctx); err != nil {
 			return xerrors.Errorf("no network: %w", err)
 		}
@@ -1072,8 +1230,8 @@ func (a *agent) run() (retErr error) {
 }
 
 // handleManifest returns a function that fetches and processes the manifest
-func (a *agent) handleManifest(manifestOK *checkpoint) func(ctx context.Context, aAPI proto.DRPCAgentClient26) error {
-	return func(ctx context.Context, aAPI proto.DRPCAgentClient26) error {
+func (a *agent) handleManifest(manifestOK *checkpoint) func(ctx context.Context, aAPI proto.DRPCAgentClient28) error {
+	return func(ctx context.Context, aAPI proto.DRPCAgentClient28) error {
 		var (
 			sentResult = false
 			err        error
@@ -1083,11 +1241,20 @@ func (a *agent) handleManifest(manifestOK *checkpoint) func(ctx context.Context,
 				manifestOK.complete(err)
 			}
 		}()
-		mp, err := aAPI.GetManifest(ctx, &proto.GetManifestRequest{})
+		mpRaw, err := aAPI.GetManifest(ctx, &proto.GetManifestRequest{})
 		if err != nil {
 			return xerrors.Errorf("fetch metadata: %w", err)
 		}
-		a.logger.Info(ctx, "fetched manifest", slog.F("manifest", mp))
+		a.logger.Info(ctx, "fetched manifest")
+
+		// Strip secrets from the proto manifest immediately to avoid accidental leakage.
+		secrets := agentsdk.SecretsFromProto(mpRaw.Secrets)
+		mpRaw.Secrets = nil
+		mp, ok := googleproto.Clone(mpRaw).(*proto.Manifest)
+		if !ok {
+			return xerrors.Errorf("clone manifest: type mismatch")
+		}
+
 		manifest, err := agentsdk.ManifestFromProto(mp)
 		if err != nil {
 			a.logger.Critical(ctx, "failed to convert manifest", slog.F("manifest", mp), slog.Error(err))
@@ -1135,9 +1302,25 @@ func (a *agent) handleManifest(manifestOK *checkpoint) func(ctx context.Context,
 			return xerrors.Errorf("update workspace agent startup: %w", err)
 		}
 
+		a.secrets.Store(&secrets)
 		oldManifest := a.manifest.Swap(&manifest)
 		manifestOK.complete(nil)
 		sentResult = true
+
+		// Write secret files after signaling manifest readiness so that network
+		// initialization (which depends on manifestOK) starts as soon as
+		// possible. This creates a theoretical race where an SSH session that
+		// connects and reads a secret file before writes finish would see stale
+		// or missing content, but in practice SSH requires network init +
+		// coordination before any connection arrives, which should take far
+		// longer than file writes. Startup scripts still wait because they run
+		// sequentially below. Env var injection is unaffected because it
+		// happens lazily per-command in updateCommandEnv.
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			a.logger.Warn(ctx, "failed to resolve home directory for secret files", slog.Error(err))
+		}
+		writeSecretFiles(ctx, a.logger, a.filesystem, homeDir, secrets)
 
 		// The startup script should only execute on the first run!
 		if oldManifest == nil {
@@ -1225,6 +1408,14 @@ func (a *agent) handleManifest(manifestOK *checkpoint) func(ctx context.Context,
 				}
 				a.metrics.startupScriptSeconds.WithLabelValues(label).Set(dur)
 				a.scriptRunner.StartCron()
+
+				// Connect to workspace MCP servers after the
+				// lifecycle transition to avoid delaying Ready.
+				// This runs inside the tracked goroutine so it
+				// is properly awaited on shutdown.
+				if mcpErr := a.mcpManager.Reload(a.gracefulCtx, a.contextConfigAPI.MCPConfigFiles()); mcpErr != nil {
+					a.logger.Warn(ctx, "failed to reload workspace MCP servers", slog.Error(mcpErr))
+				}
 			})
 			if err != nil {
 				return xerrors.Errorf("track conn goroutine: %w", err)
@@ -1236,7 +1427,7 @@ func (a *agent) handleManifest(manifestOK *checkpoint) func(ctx context.Context,
 
 func (a *agent) createDevcontainer(
 	ctx context.Context,
-	aAPI proto.DRPCAgentClient26,
+	aAPI proto.DRPCAgentClient28,
 	dc codersdk.WorkspaceAgentDevcontainer,
 	script codersdk.WorkspaceAgentScript,
 ) (err error) {
@@ -1268,8 +1459,8 @@ func (a *agent) createDevcontainer(
 
 // createOrUpdateNetwork waits for the manifest to be set using manifestOK, then creates or updates
 // the tailnet using the information in the manifest
-func (a *agent) createOrUpdateNetwork(manifestOK, networkOK *checkpoint) func(context.Context, proto.DRPCAgentClient26) error {
-	return func(ctx context.Context, aAPI proto.DRPCAgentClient26) (retErr error) {
+func (a *agent) createOrUpdateNetwork(manifestOK, networkOK *checkpoint) func(context.Context, proto.DRPCAgentClient28) error {
+	return func(ctx context.Context, aAPI proto.DRPCAgentClient28) (retErr error) {
 		if err := manifestOK.wait(ctx); err != nil {
 			return xerrors.Errorf("no manifest: %w", err)
 		}
@@ -1308,7 +1499,7 @@ func (a *agent) createOrUpdateNetwork(manifestOK, networkOK *checkpoint) func(co
 			a.closeMutex.Unlock()
 			if closing {
 				_ = network.Close()
-				return xerrors.New("agent is closing")
+				return xerrors.Errorf("agent closed while creating tailnet: %w", ErrAgentClosing)
 			}
 		} else {
 			// Update the wireguard IPs if the agent ID changed.
@@ -1337,6 +1528,7 @@ func (a *agent) createOrUpdateNetwork(manifestOK, networkOK *checkpoint) func(co
 // - Predefined workspace environment variables
 // - Environment variables currently set (overriding predefined)
 // - Environment variables passed via the agent manifest (overriding predefined and current)
+// - User secret variables passed via the agent manifest (overriding predefined, current, and manifest env vars)
 // - Agent-level environment variables (overriding all)
 func (a *agent) updateCommandEnv(current []string) (updated []string, err error) {
 	manifest := a.manifest.Load()
@@ -1358,6 +1550,7 @@ func (a *agent) updateCommandEnv(current []string) (updated []string, err error)
 		"CODER_WORKSPACE_NAME":       manifest.WorkspaceName,
 		"CODER_WORKSPACE_AGENT_NAME": manifest.AgentName,
 		"CODER_WORKSPACE_OWNER_NAME": manifest.OwnerName,
+		"CODER_WORKSPACE_ID":         manifest.WorkspaceID.String(),
 
 		// Specific Coder subcommands require the agent token exposed!
 		"CODER_AGENT_TOKEN": a.client.GetSessionToken(),
@@ -1397,6 +1590,19 @@ func (a *agent) updateCommandEnv(current []string) (updated []string, err error)
 		envs[k] = os.ExpandEnv(v)
 	}
 
+	// User secrets override manifest env vars so that secrets
+	// take precedence over template-defined values, but are
+	// still overridden by agent-level bootstrap vars below.
+	// Values are assigned raw without os.ExpandEnv because
+	// secret values may contain dollar signs (e.g. passwords)
+	// that must not be interpreted as variable references.
+	if secretsPtr := a.secrets.Load(); secretsPtr != nil {
+		for _, secret := range *secretsPtr {
+			if secret.EnvName != "" {
+				envs[secret.EnvName] = string(secret.Value)
+			}
+		}
+	}
 	// Agent-level environment variables should take over all. This is
 	// used for setting agent-specific variables like CODER_AGENT_TOKEN
 	// and GIT_ASKPASS.
@@ -1417,6 +1623,73 @@ func (a *agent) updateCommandEnv(current []string) (updated []string, err error)
 	return updated, nil
 }
 
+// writeSecretFiles writes user secrets with file_path set to disk.
+// Errors are logged but do not block workspace startup.
+func writeSecretFiles(ctx context.Context, logger slog.Logger, fs afero.Fs, homeDir string, secrets []agentsdk.WorkspaceSecret) {
+	// Track resolved paths to detect collisions after ~/ expansion.
+	// Two secrets with different file_path values can resolve to
+	// the same absolute path (e.g. ~/x and /home/coder/x). The API
+	// layer prevents duplicates on the raw file_path but cannot see
+	// post-resolution collisions. We still write both, with the
+	// later one winning, but log a warning so the conflict is
+	// visible.
+	seen := make(map[string]string, len(secrets))
+
+	for _, secret := range secrets {
+		if secret.FilePath == "" {
+			continue
+		}
+
+		filePath := secret.FilePath
+		if strings.HasPrefix(filePath, "~/") {
+			if homeDir == "" {
+				logger.Warn(ctx, "skipping secret file with ~/ path: home directory unknown",
+					slog.F("file_path", filePath),
+				)
+				continue
+			}
+			filePath = filepath.Join(homeDir, filePath[2:])
+		}
+		filePath = filepath.Clean(filePath)
+
+		if original, ok := seen[filePath]; ok {
+			// Known shortcoming: the winning secret is determined by the order
+			// of secrets in the manifest, which is currently alphabetical by
+			// secret name from ListUserSecretsWithValues. This ordering is not
+			// user-controllable and has no semantic meaning; users should avoid
+			// path collisions rather than rely on which secret wins.
+			logger.Warn(ctx, "multiple secrets resolve to the same file path; later secret in manifest order will win (not user-controllable)",
+				slog.F("resolved_path", filePath),
+				slog.F("first_file_path", original),
+				slog.F("conflicting_file_path", secret.FilePath),
+			)
+		}
+		seen[filePath] = secret.FilePath
+
+		dir := filepath.Dir(filePath)
+		if err := fs.MkdirAll(dir, 0o700); err != nil {
+			logger.Warn(ctx, "failed to create directory for secret file",
+				slog.F("file_path", filePath),
+				slog.Error(err),
+			)
+			continue
+		}
+
+		// The 0o600 perm only applies when the file is created.
+		// If the file already exists, its permissions are
+		// preserved. We only update the content.
+		if err := afero.WriteFile(fs, filePath, secret.Value, 0o600); err != nil {
+			logger.Warn(ctx, "failed to write secret file",
+				slog.F("file_path", filePath),
+				slog.Error(err),
+			)
+			continue
+		}
+
+		logger.Debug(ctx, "wrote secret file", slog.F("file_path", filePath))
+	}
+}
+
 func (*agent) wireguardAddresses(agentID uuid.UUID) []netip.Prefix {
 	return []netip.Prefix{
 		// This is the IP that should be used primarily.
@@ -1431,7 +1704,7 @@ func (a *agent) trackGoroutine(fn func()) error {
 	a.closeMutex.Lock()
 	defer a.closeMutex.Unlock()
 	if a.closing {
-		return xerrors.New("track conn goroutine: agent is closing")
+		return xerrors.Errorf("track conn goroutine: %w", ErrAgentClosing)
 	}
 	a.closeWaitGroup.Add(1)
 	go func() {
@@ -1461,6 +1734,7 @@ func (a *agent) createTailnet(
 		DERPMap:             derpMap,
 		DERPForceWebSockets: derpForceWebSockets,
 		DERPHeader:          &header,
+		DERPTLSConfig:       a.derpTLSConfig,
 		Logger:              a.logger.Named("net.tailnet"),
 		ListenPort:          a.tailnetListenPort,
 		BlockEndpoints:      disableDirectConnections,
@@ -1536,8 +1810,8 @@ func (a *agent) createTailnet(
 				break
 			}
 			clog := a.logger.Named("speedtest").With(
-				slog.F("remote", conn.RemoteAddr().String()),
-				slog.F("local", conn.LocalAddr().String()))
+				slog.F("remote", conn.RemoteAddr()),
+				slog.F("local", conn.LocalAddr()))
 			clog.Info(ctx, "accepted conn")
 			wg.Add(1)
 			closed := make(chan struct{})
@@ -1752,7 +2026,7 @@ func (a *agent) Collect(ctx context.Context, networkStats map[netlogtype.Connect
 		}()
 	}
 	wg.Wait()
-	sort.Float64s(durations)
+	slices.Sort(durations)
 	durationsLength := len(durations)
 	switch {
 	case durationsLength == 0:
@@ -1920,6 +2194,7 @@ func (a *agent) Close() error {
 			lifecycleState = codersdk.WorkspaceAgentLifecycleShutdownError
 		}
 	}
+
 	a.setLifecycle(lifecycleState)
 
 	err = a.scriptRunner.Close()
@@ -1927,8 +2202,33 @@ func (a *agent) Close() error {
 		a.logger.Error(a.hardCtx, "script runner close", slog.Error(err))
 	}
 
+	if a.socketServer != nil {
+		if err := a.socketServer.Close(); err != nil {
+			a.logger.Error(a.hardCtx, "socket server close", slog.Error(err))
+		}
+	}
+
 	if err := a.containerAPI.Close(); err != nil {
 		a.logger.Error(a.hardCtx, "container API close", slog.Error(err))
+	}
+
+	if err := a.processAPI.Close(); err != nil {
+		a.logger.Error(a.hardCtx, "process API close", slog.Error(err))
+	}
+
+	if err := a.desktopAPI.Close(); err != nil {
+		a.logger.Error(a.hardCtx, "desktop API close", slog.Error(err))
+	}
+
+	if err := a.mcpManager.Close(); err != nil {
+		a.logger.Error(a.hardCtx, "mcp manager close", slog.Error(err))
+	}
+
+	if a.boundaryLogProxy != nil {
+		err = a.boundaryLogProxy.Close()
+		if err != nil {
+			a.logger.Warn(context.Background(), "close boundary log proxy", slog.Error(err))
+		}
 	}
 
 	// Wait for the graceful shutdown to complete, but don't wait forever so
@@ -2048,8 +2348,8 @@ const (
 
 type apiConnRoutineManager struct {
 	logger    slog.Logger
-	aAPI      proto.DRPCAgentClient26
-	tAPI      tailnetproto.DRPCTailnetClient24
+	aAPI      proto.DRPCAgentClient28
+	tAPI      tailnetproto.DRPCTailnetClient28
 	eg        *errgroup.Group
 	stopCtx   context.Context
 	remainCtx context.Context
@@ -2057,7 +2357,7 @@ type apiConnRoutineManager struct {
 
 func newAPIConnRoutineManager(
 	gracefulCtx, hardCtx context.Context, logger slog.Logger,
-	aAPI proto.DRPCAgentClient26, tAPI tailnetproto.DRPCTailnetClient24,
+	aAPI proto.DRPCAgentClient28, tAPI tailnetproto.DRPCTailnetClient28,
 ) *apiConnRoutineManager {
 	// routines that remain in operation during graceful shutdown use the remainCtx.  They'll still
 	// exit if the errgroup hits an error, which usually means a problem with the conn.
@@ -2090,7 +2390,7 @@ func newAPIConnRoutineManager(
 // but for Tailnet.
 func (a *apiConnRoutineManager) startAgentAPI(
 	name string, behavior gracefulShutdownBehavior,
-	f func(context.Context, proto.DRPCAgentClient26) error,
+	f func(context.Context, proto.DRPCAgentClient28) error,
 ) {
 	logger := a.logger.With(slog.F("name", name))
 	var ctx context.Context
@@ -2105,16 +2405,7 @@ func (a *apiConnRoutineManager) startAgentAPI(
 	a.eg.Go(func() error {
 		logger.Debug(ctx, "starting agent routine")
 		err := f(ctx, a.aAPI)
-		if xerrors.Is(err, context.Canceled) && ctx.Err() != nil {
-			logger.Debug(ctx, "swallowing context canceled")
-			// Don't propagate context canceled errors to the error group, because we don't want the
-			// graceful context being canceled to halt the work of routines with
-			// gracefulShutdownBehaviorRemain.  Note that we check both that the error is
-			// context.Canceled and that *our* context is currently canceled, because when Coderd
-			// unilaterally closes the API connection (for example if the build is outdated), it can
-			// sometimes show up as context.Canceled in our RPC calls.
-			return nil
-		}
+		err = shouldPropagateError(ctx, logger, err)
 		logger.Debug(ctx, "routine exited", slog.Error(err))
 		if err != nil {
 			return xerrors.Errorf("error in routine %s: %w", name, err)
@@ -2142,22 +2433,41 @@ func (a *apiConnRoutineManager) startTailnetAPI(
 	a.eg.Go(func() error {
 		logger.Debug(ctx, "starting tailnet routine")
 		err := f(ctx, a.tAPI)
-		if xerrors.Is(err, context.Canceled) && ctx.Err() != nil {
-			logger.Debug(ctx, "swallowing context canceled")
-			// Don't propagate context canceled errors to the error group, because we don't want the
-			// graceful context being canceled to halt the work of routines with
-			// gracefulShutdownBehaviorRemain.  Note that we check both that the error is
-			// context.Canceled and that *our* context is currently canceled, because when Coderd
-			// unilaterally closes the API connection (for example if the build is outdated), it can
-			// sometimes show up as context.Canceled in our RPC calls.
-			return nil
-		}
+		err = shouldPropagateError(ctx, logger, err)
 		logger.Debug(ctx, "routine exited", slog.Error(err))
 		if err != nil {
 			return xerrors.Errorf("error in routine %s: %w", name, err)
 		}
 		return nil
 	})
+}
+
+// shouldPropagateError decides whether an error from an API connection routine should be propagated to the
+// apiConnRoutineManager. Its purpose is to prevent errors related to shutting down from propagating to the manager's
+// error group, which will tear down the API connection and potentially stop graceful shutdown from succeeding.
+func shouldPropagateError(ctx context.Context, logger slog.Logger, err error) error {
+	if (xerrors.Is(err, context.Canceled) ||
+		xerrors.Is(err, io.EOF)) &&
+		ctx.Err() != nil {
+		logger.Debug(ctx, "swallowing error because context is canceled", slog.Error(err))
+		// Don't propagate context canceled errors to the error group, because we don't want the
+		// graceful context being canceled to halt the work of routines with
+		// gracefulShutdownBehaviorRemain. Unfortunately, the dRPC library closes the stream
+		// when context is canceled on an RPC, so canceling the context can also show up as
+		// io.EOF. Also, when Coderd unilaterally closes the API connection (for example if the
+		// build is outdated), it can sometimes show up as context.Canceled in our RPC calls.
+		// We can't reliably distinguish between a context cancelation and a legit EOF, so we
+		// also check that *our* context is currently canceled. If it is, we can safely ignore
+		// the error.
+		return nil
+	}
+	if xerrors.Is(err, ErrAgentClosing) {
+		logger.Debug(ctx, "swallowing error because agent is closing")
+		// This can only be generated when the agent is closing, so we never want it to propagate to other routines.
+		// (They are signaled to exit via canceled contexts.)
+		return nil
+	}
+	return err
 }
 
 func (a *apiConnRoutineManager) wait() error {

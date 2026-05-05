@@ -1,23 +1,21 @@
-import { API } from "api/api";
-import type * as TypesGen from "api/typesGenerated";
-import { Badge } from "components/Badge/Badge";
-import { Button } from "components/Button/Button";
-import { ExternalImage } from "components/ExternalImage/ExternalImage";
-import { CoderIcon } from "components/Icons/CoderIcon";
-import {
-	Tooltip,
-	TooltipContent,
-	TooltipProvider,
-	TooltipTrigger,
-} from "components/Tooltip/Tooltip";
-import type { ProxyContextValue } from "contexts/ProxyContext";
-import { useWebpushNotifications } from "contexts/useWebpushNotifications";
-import { useEmbeddedMetadata } from "hooks/useEmbeddedMetadata";
-import { NotificationsInbox } from "modules/notifications/NotificationsInbox/NotificationsInbox";
 import type { FC } from "react";
 import { useQuery } from "react-query";
 import { NavLink, useLocation } from "react-router";
-import { cn } from "utils/cn";
+import { API } from "#/api/api";
+import type * as TypesGen from "#/api/typesGenerated";
+import { Badge } from "#/components/Badge/Badge";
+import { Button } from "#/components/Button/Button";
+import { ProductLogo } from "#/components/Icons/ProductLogo";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipTrigger,
+} from "#/components/Tooltip/Tooltip";
+import type { ProxyContextValue } from "#/contexts/ProxyContext";
+import { useEmbeddedMetadata } from "#/hooks/useEmbeddedMetadata";
+import { NotificationsInbox } from "#/modules/notifications/NotificationsInbox/NotificationsInbox";
+import { getPrereleaseFlag } from "#/utils/buildInfo";
+import { cn } from "#/utils/cn";
 import { DeploymentDropdown } from "./DeploymentDropdown";
 import { MobileMenu } from "./MobileMenu";
 import { ProxyMenu } from "./ProxyMenu";
@@ -25,7 +23,6 @@ import { SupportIcon } from "./SupportIcon";
 import { UserDropdown } from "./UserDropdown/UserDropdown";
 
 interface NavbarViewProps {
-	logo_url?: string;
 	user: TypesGen.User;
 	buildInfo?: TypesGen.BuildInfoResponse;
 	supportLinks: readonly TypesGen.LinkConfig[];
@@ -35,6 +32,8 @@ interface NavbarViewProps {
 	canViewAuditLog: boolean;
 	canViewConnectionLog: boolean;
 	canViewHealth: boolean;
+	canViewAIBridge: boolean;
+	canCreateChat: boolean;
 	proxyContextValue?: ProxyContextValue;
 }
 
@@ -46,7 +45,6 @@ const linkStyles = {
 
 export const NavbarView: FC<NavbarViewProps> = ({
 	user,
-	logo_url,
 	buildInfo,
 	supportLinks,
 	onSignOut,
@@ -55,21 +53,58 @@ export const NavbarView: FC<NavbarViewProps> = ({
 	canViewHealth,
 	canViewAuditLog,
 	canViewConnectionLog,
+	canViewAIBridge,
+	canCreateChat,
 	proxyContextValue,
 }) => {
-	const webPush = useWebpushNotifications();
+	const prerelease = getPrereleaseFlag(buildInfo);
 
 	return (
-		<div className="border-0 border-b border-solid h-[72px] min-h-[72px] flex items-center leading-none px-6">
+		<div
+			className={cn(
+				"sticky top-0 bg-surface-primary z-40 border-0 border-b border-solid h-[72px] min-h-[72px] flex items-center leading-none px-6",
+				prerelease &&
+					cn(
+						"[&:before]:content-[''] [&:before]:absolute [&:before]:left-0",
+						"[&:before]:right-0 [&:before]:h-1 [&:before]:top-0",
+						"[&:before]:bg-[repeating-linear-gradient(-45deg,_transparent,_transparent_4px,_hsl(var(--stripe-color)_/_0.5)_4px,_hsl(var(--stripe-color)_/_0.5)_8px)]",
+					),
+			)}
+			style={{
+				"--stripe-color":
+					prerelease === "rc"
+						? "var(--border-sky)"
+						: prerelease === "devel"
+							? "var(--content-warning)"
+							: undefined,
+			}}
+		>
 			<NavLink to="/workspaces">
-				{logo_url ? (
-					<ExternalImage className="h-7" src={logo_url} alt="Custom Logo" />
-				) : (
-					<CoderIcon className="h-7 w-7 fill-content-primary" />
-				)}
+				<ProductLogo className="h-7" />
 			</NavLink>
 
-			<NavItems className="ml-4" user={user} />
+			<NavItems
+				className="ml-4 hidden md:flex"
+				user={user}
+				canCreateChat={canCreateChat}
+			/>
+
+			{prerelease && buildInfo?.version && (
+				<a
+					href={buildInfo.external_url}
+					target="_blank"
+					rel="noreferrer"
+					className="absolute top-0 left-1/2 -translate-x-1/2 no-underline z-10"
+				>
+					<Badge
+						variant={prerelease === "rc" ? "info" : "warning"}
+						size="sm"
+						className="font-mono rounded-t-none border-t-0"
+					>
+						{buildInfo.version}
+					</Badge>
+				</a>
+			)}
 
 			<div className="flex items-center gap-3 ml-auto">
 				{supportLinks.filter(isNavbarLink).map((link) => (
@@ -95,28 +130,9 @@ export const NavbarView: FC<NavbarViewProps> = ({
 						canViewDeployment={canViewDeployment}
 						canViewHealth={canViewHealth}
 						canViewConnectionLog={canViewConnectionLog}
+						canViewAIBridge={canViewAIBridge}
 					/>
 				</div>
-
-				{webPush.enabled ? (
-					webPush.subscribed ? (
-						<Button
-							variant="outline"
-							disabled={webPush.loading}
-							onClick={webPush.unsubscribe}
-						>
-							Disable WebPush
-						</Button>
-					) : (
-						<Button
-							variant="outline"
-							disabled={webPush.loading}
-							onClick={webPush.subscribe}
-						>
-							Enable WebPush
-						</Button>
-					)
-				) : null}
 
 				<NotificationsInbox
 					fetchNotifications={API.getInboxNotifications}
@@ -158,9 +174,10 @@ export const NavbarView: FC<NavbarViewProps> = ({
 interface NavItemsProps {
 	className?: string;
 	user: TypesGen.User;
+	canCreateChat: boolean;
 }
 
-const NavItems: FC<NavItemsProps> = ({ className, user }) => {
+const NavItems: FC<NavItemsProps> = ({ className, user, canCreateChat }) => {
 	const location = useLocation();
 
 	return (
@@ -185,6 +202,7 @@ const NavItems: FC<NavItemsProps> = ({ className, user }) => {
 				Templates
 			</NavLink>
 			<TasksNavItem user={user} />
+			<AgentsNavItem canCreateChat={canCreateChat} />
 		</nav>
 	);
 };
@@ -205,7 +223,7 @@ const TasksNavItem: FC<TasksNavItemProps> = ({ user }) => {
 	};
 	const { data: idleCount } = useQuery({
 		queryKey: ["tasks", filter],
-		queryFn: () => API.experimental.getTasks(filter),
+		queryFn: () => API.getTasks(filter),
 		refetchInterval: 1_000 * 60,
 		enabled: canSeeTasks,
 		refetchOnWindowFocus: true,
@@ -227,21 +245,19 @@ const TasksNavItem: FC<TasksNavItemProps> = ({ user }) => {
 		>
 			Tasks
 			{idleCount > 0 && (
-				<TooltipProvider>
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<Badge
-								variant="info"
-								size="xs"
-								className="ml-2"
-								aria-label={idleTasksLabel(idleCount)}
-							>
-								{idleCount}
-							</Badge>
-						</TooltipTrigger>
-						<TooltipContent>{idleTasksLabel(idleCount)}</TooltipContent>
-					</Tooltip>
-				</TooltipProvider>
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<Badge
+							variant="info"
+							size="xs"
+							className="ml-2"
+							aria-label={idleTasksLabel(idleCount)}
+						>
+							{idleCount}
+						</Badge>
+					</TooltipTrigger>
+					<TooltipContent>{idleTasksLabel(idleCount)}</TooltipContent>
+				</Tooltip>
 			)}
 		</NavLink>
 	);
@@ -250,6 +266,23 @@ const TasksNavItem: FC<TasksNavItemProps> = ({ user }) => {
 function idleTasksLabel(count: number) {
 	return `You have ${count} ${count === 1 ? "task" : "tasks"} waiting for input`;
 }
+
+const AgentsNavItem: FC<{ canCreateChat: boolean }> = ({ canCreateChat }) => {
+	if (!canCreateChat) {
+		return null;
+	}
+
+	return (
+		<NavLink
+			className={({ isActive }) => {
+				return cn(linkStyles.default, { [linkStyles.active]: isActive });
+			}}
+			to="/agents"
+		>
+			Agents
+		</NavLink>
+	);
+};
 
 function isNavbarLink(link: TypesGen.LinkConfig): boolean {
 	return link.location === "navbar";
@@ -271,12 +304,7 @@ const SupportButton: FC<SupportButtonProps> = ({ name, target, icon }) => {
 				rel="noreferrer"
 				className="inline-block"
 			>
-				{icon && (
-					<SupportIcon
-						icon={icon}
-						className={"size-5 text-content-secondary"}
-					/>
-				)}
+				{icon && <SupportIcon icon={icon} className="text-content-secondary" />}
 				{name}
 				<span className="sr-only"> (link opens in new tab)</span>
 			</a>

@@ -1,14 +1,16 @@
+import { act, renderHook } from "@testing-library/react";
+import type { Region, User } from "#/api/typesGenerated";
 import {
 	MockAppearanceConfig,
 	MockBuildInfo,
 	MockEntitlements,
 	MockExperiments,
+	MockOrganization,
+	MockPermissions,
 	MockTasksTabVisible,
 	MockUserAppearanceSettings,
 	MockUserOwner,
-} from "testHelpers/entities";
-import { act, renderHook } from "@testing-library/react";
-import type { Region, User } from "api/typesGenerated";
+} from "#/testHelpers/entities";
 import {
 	DEFAULT_METADATA_KEY,
 	type MetadataKey,
@@ -43,6 +45,8 @@ const mockDataForTags = {
 	userAppearance: MockUserAppearanceSettings,
 	regions: MockRegions,
 	"tasks-tab-visible": MockTasksTabVisible,
+	permissions: MockPermissions,
+	organizations: [MockOrganization],
 } as const satisfies Record<MetadataKey, MetadataValue>;
 
 const emptyMetadata: RuntimeHtmlMetadata = {
@@ -75,6 +79,14 @@ const emptyMetadata: RuntimeHtmlMetadata = {
 		value: undefined,
 	},
 	"tasks-tab-visible": {
+		available: false,
+		value: undefined,
+	},
+	permissions: {
+		available: false,
+		value: undefined,
+	},
+	organizations: {
 		available: false,
 		value: undefined,
 	},
@@ -112,6 +124,14 @@ const populatedMetadata: RuntimeHtmlMetadata = {
 	"tasks-tab-visible": {
 		available: true,
 		value: MockTasksTabVisible,
+	},
+	permissions: {
+		available: true,
+		value: MockPermissions,
+	},
+	organizations: {
+		available: true,
+		value: [MockOrganization],
 	},
 };
 
@@ -190,7 +210,7 @@ describe(useEmbeddedMetadata.name, () => {
 		const cleanupTags = seedInitialMetadata(key);
 		const { result: reactResult, manager } = renderMetadataHook(key);
 
-		const nonReactSubscriber = jest.fn();
+		const nonReactSubscriber = vi.fn();
 		manager.subscribe(nonReactSubscriber);
 
 		const expectedUpdate1: RuntimeHtmlMetadata = {

@@ -6,25 +6,24 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/require"
-	"tailscale.com/types/ptr"
-
 	"github.com/prometheus/client_golang/prometheus"
 	prometheus_client "github.com/prometheus/client_model/go"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace/noop"
+	"tailscale.com/types/ptr"
 
-	"cdr.dev/slog/sloggers/slogtest"
+	"cdr.dev/slog/v3/sloggers/slogtest"
 	"github.com/coder/coder/v2/coderd/coderdtest"
-	"github.com/coder/coder/v2/coderd/files"
-	"github.com/coder/quartz"
-
 	"github.com/coder/coder/v2/coderd/database"
 	"github.com/coder/coder/v2/coderd/database/dbauthz"
 	"github.com/coder/coder/v2/coderd/database/dbgen"
 	"github.com/coder/coder/v2/coderd/database/dbtestutil"
 	"github.com/coder/coder/v2/coderd/database/dbtime"
+	"github.com/coder/coder/v2/coderd/files"
 	"github.com/coder/coder/v2/codersdk"
 	"github.com/coder/coder/v2/enterprise/coderd/prebuilds"
 	"github.com/coder/coder/v2/testutil"
+	"github.com/coder/quartz"
 )
 
 func TestMetricsCollector(t *testing.T) {
@@ -197,7 +196,16 @@ func TestMetricsCollector(t *testing.T) {
 									clock := quartz.NewMock(t)
 									db, pubsub := dbtestutil.NewDB(t)
 									cache := files.New(prometheus.NewRegistry(), &coderdtest.FakeAuthorizer{})
-									reconciler := prebuilds.NewStoreReconciler(db, pubsub, cache, codersdk.PrebuildsConfig{}, logger, quartz.NewMock(t), prometheus.NewRegistry(), newNoopEnqueuer(), newNoopUsageCheckerPtr())
+									reconciler := prebuilds.NewStoreReconciler(
+										db, pubsub, cache, codersdk.PrebuildsConfig{}, logger,
+										clock,
+										prometheus.NewRegistry(),
+										newNoopEnqueuer(),
+										newNoopUsageCheckerPtr(),
+										noop.NewTracerProvider(),
+										10,
+										nil,
+									)
 									ctx := testutil.Context(t, testutil.WaitLong)
 
 									createdUsers := []uuid.UUID{database.PrebuildsSystemUserID}
@@ -329,7 +337,16 @@ func TestMetricsCollector_DuplicateTemplateNames(t *testing.T) {
 	clock := quartz.NewMock(t)
 	db, pubsub := dbtestutil.NewDB(t)
 	cache := files.New(prometheus.NewRegistry(), &coderdtest.FakeAuthorizer{})
-	reconciler := prebuilds.NewStoreReconciler(db, pubsub, cache, codersdk.PrebuildsConfig{}, logger, quartz.NewMock(t), prometheus.NewRegistry(), newNoopEnqueuer(), newNoopUsageCheckerPtr())
+	reconciler := prebuilds.NewStoreReconciler(
+		db, pubsub, cache, codersdk.PrebuildsConfig{}, logger,
+		clock,
+		prometheus.NewRegistry(),
+		newNoopEnqueuer(),
+		newNoopUsageCheckerPtr(),
+		noop.NewTracerProvider(),
+		10,
+		nil,
+	)
 	ctx := testutil.Context(t, testutil.WaitLong)
 
 	collector := prebuilds.NewMetricsCollector(db, logger, reconciler)
@@ -415,6 +432,7 @@ func findMetric(metricsFamilies []*prometheus_client.MetricFamily, name string, 
 			continue
 		}
 
+	metricLoop:
 		for _, metric := range metricFamily.GetMetric() {
 			labelPairs := metric.GetLabel()
 
@@ -427,7 +445,7 @@ func findMetric(metricsFamilies []*prometheus_client.MetricFamily, name string, 
 			// Check if all requested labels match
 			for wantName, wantValue := range labels {
 				if metricLabels[wantName] != wantValue {
-					continue
+					continue metricLoop
 				}
 			}
 
@@ -441,6 +459,7 @@ func findMetric(metricsFamilies []*prometheus_client.MetricFamily, name string, 
 func findAllMetricSeries(metricsFamilies []*prometheus_client.MetricFamily, labels map[string]string) map[string]*prometheus_client.Metric {
 	series := make(map[string]*prometheus_client.Metric)
 	for _, metricFamily := range metricsFamilies {
+	metricLoop:
 		for _, metric := range metricFamily.GetMetric() {
 			labelPairs := metric.GetLabel()
 
@@ -457,7 +476,7 @@ func findAllMetricSeries(metricsFamilies []*prometheus_client.MetricFamily, labe
 			// Check if all requested labels match
 			for wantName, wantValue := range labels {
 				if metricLabels[wantName] != wantValue {
-					continue
+					continue metricLoop
 				}
 			}
 
@@ -477,7 +496,16 @@ func TestMetricsCollector_ReconciliationPausedMetric(t *testing.T) {
 		db, pubsub := dbtestutil.NewDB(t)
 		cache := files.New(prometheus.NewRegistry(), &coderdtest.FakeAuthorizer{})
 		registry := prometheus.NewPedanticRegistry()
-		reconciler := prebuilds.NewStoreReconciler(db, pubsub, cache, codersdk.PrebuildsConfig{}, logger, quartz.NewMock(t), registry, newNoopEnqueuer(), newNoopUsageCheckerPtr())
+		reconciler := prebuilds.NewStoreReconciler(
+			db, pubsub, cache, codersdk.PrebuildsConfig{}, logger,
+			quartz.NewMock(t),
+			registry,
+			newNoopEnqueuer(),
+			newNoopUsageCheckerPtr(),
+			noop.NewTracerProvider(),
+			10,
+			nil,
+		)
 		ctx := testutil.Context(t, testutil.WaitLong)
 
 		// Ensure no pause setting is set (default state)
@@ -485,7 +513,7 @@ func TestMetricsCollector_ReconciliationPausedMetric(t *testing.T) {
 		require.NoError(t, err)
 
 		// Run reconciliation to update the metric
-		err = reconciler.ReconcileAll(ctx)
+		_, err = reconciler.ReconcileAll(ctx)
 		require.NoError(t, err)
 
 		// Check that the metric shows reconciliation is not paused
@@ -506,7 +534,16 @@ func TestMetricsCollector_ReconciliationPausedMetric(t *testing.T) {
 		db, pubsub := dbtestutil.NewDB(t)
 		cache := files.New(prometheus.NewRegistry(), &coderdtest.FakeAuthorizer{})
 		registry := prometheus.NewPedanticRegistry()
-		reconciler := prebuilds.NewStoreReconciler(db, pubsub, cache, codersdk.PrebuildsConfig{}, logger, quartz.NewMock(t), registry, newNoopEnqueuer(), newNoopUsageCheckerPtr())
+		reconciler := prebuilds.NewStoreReconciler(
+			db, pubsub, cache, codersdk.PrebuildsConfig{}, logger,
+			quartz.NewMock(t),
+			registry,
+			newNoopEnqueuer(),
+			newNoopUsageCheckerPtr(),
+			noop.NewTracerProvider(),
+			10,
+			nil,
+		)
 		ctx := testutil.Context(t, testutil.WaitLong)
 
 		// Set reconciliation to paused
@@ -514,7 +551,7 @@ func TestMetricsCollector_ReconciliationPausedMetric(t *testing.T) {
 		require.NoError(t, err)
 
 		// Run reconciliation to update the metric
-		err = reconciler.ReconcileAll(ctx)
+		_, err = reconciler.ReconcileAll(ctx)
 		require.NoError(t, err)
 
 		// Check that the metric shows reconciliation is paused
@@ -535,7 +572,16 @@ func TestMetricsCollector_ReconciliationPausedMetric(t *testing.T) {
 		db, pubsub := dbtestutil.NewDB(t)
 		cache := files.New(prometheus.NewRegistry(), &coderdtest.FakeAuthorizer{})
 		registry := prometheus.NewPedanticRegistry()
-		reconciler := prebuilds.NewStoreReconciler(db, pubsub, cache, codersdk.PrebuildsConfig{}, logger, quartz.NewMock(t), registry, newNoopEnqueuer(), newNoopUsageCheckerPtr())
+		reconciler := prebuilds.NewStoreReconciler(
+			db, pubsub, cache, codersdk.PrebuildsConfig{}, logger,
+			quartz.NewMock(t),
+			registry,
+			newNoopEnqueuer(),
+			newNoopUsageCheckerPtr(),
+			noop.NewTracerProvider(),
+			10,
+			nil,
+		)
 		ctx := testutil.Context(t, testutil.WaitLong)
 
 		// Set reconciliation back to not paused
@@ -543,7 +589,7 @@ func TestMetricsCollector_ReconciliationPausedMetric(t *testing.T) {
 		require.NoError(t, err)
 
 		// Run reconciliation to update the metric
-		err = reconciler.ReconcileAll(ctx)
+		_, err = reconciler.ReconcileAll(ctx)
 		require.NoError(t, err)
 
 		// Check that the metric shows reconciliation is not paused

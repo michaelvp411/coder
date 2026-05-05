@@ -1,16 +1,16 @@
+import { FolderIcon } from "lucide-react";
+import type { FC } from "react";
 import type {
 	Workspace,
 	WorkspaceAgent,
 	WorkspaceApp,
-} from "api/typesGenerated";
+} from "#/api/typesGenerated";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
 	DropdownMenuTrigger,
-} from "components/DropdownMenu/DropdownMenu";
-import { Folder } from "lucide-react";
-import type { FC } from "react";
+} from "#/components/DropdownMenu/DropdownMenu";
 import { AgentButton } from "../AgentButton";
 import { AppLink } from "../AppLink/AppLink";
 
@@ -29,7 +29,7 @@ export const AgentApps: FC<AgentAppsProps> = ({
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>
 				<AgentButton>
-					<Folder />
+					<FolderIcon />
 					{section.group}
 				</AgentButton>
 			</DropdownMenuTrigger>

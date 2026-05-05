@@ -7,12 +7,11 @@ import (
 
 	"github.com/coder/coder/v2/coderd/database"
 	"github.com/coder/coder/v2/coderd/database/db2sdk"
+	"github.com/coder/coder/v2/coderd/httpapi"
 	"github.com/coder/coder/v2/coderd/httpmw"
+	"github.com/coder/coder/v2/coderd/rbac"
 	"github.com/coder/coder/v2/coderd/rbac/policy"
 	"github.com/coder/coder/v2/codersdk"
-
-	"github.com/coder/coder/v2/coderd/httpapi"
-	"github.com/coder/coder/v2/coderd/rbac"
 )
 
 // AssignableSiteRoles returns all site wide roles that can be assigned.
@@ -23,7 +22,7 @@ import (
 // @Produce json
 // @Tags Members
 // @Success 200 {array} codersdk.AssignableRoles
-// @Router /users/roles [get]
+// @Router /api/v2/users/roles [get]
 func (api *API) AssignableSiteRoles(rw http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	actorRoles := httpmw.UserAuthorization(r.Context())
@@ -35,15 +34,19 @@ func (api *API) AssignableSiteRoles(rw http.ResponseWriter, r *http.Request) {
 	dbCustomRoles, err := api.Database.CustomRoles(ctx, database.CustomRolesParams{
 		LookupRoles: nil,
 		// Only site wide custom roles to be included
-		ExcludeOrgRoles: true,
-		OrganizationID:  uuid.Nil,
+		ExcludeOrgRoles:    true,
+		OrganizationID:     uuid.Nil,
+		IncludeSystemRoles: false,
 	})
 	if err != nil {
 		httpapi.InternalServerError(rw, err)
 		return
 	}
 
-	httpapi.Write(ctx, rw, http.StatusOK, assignableRoles(actorRoles.Roles, rbac.SiteBuiltInRoles(), dbCustomRoles))
+	siteRoles := rbac.SiteBuiltInRoles()
+
+	httpapi.Write(ctx, rw, http.StatusOK,
+		assignableRoles(actorRoles.Roles, siteRoles, dbCustomRoles))
 }
 
 // assignableOrgRoles returns all org wide roles that can be assigned.
@@ -55,7 +58,7 @@ func (api *API) AssignableSiteRoles(rw http.ResponseWriter, r *http.Request) {
 // @Tags Members
 // @Param organization path string true "Organization ID" format(uuid)
 // @Success 200 {array} codersdk.AssignableRoles
-// @Router /organizations/{organization}/members/roles [get]
+// @Router /api/v2/organizations/{organization}/members/roles [get]
 func (api *API) assignableOrgRoles(rw http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	organization := httpmw.OrganizationParam(r)
@@ -68,9 +71,10 @@ func (api *API) assignableOrgRoles(rw http.ResponseWriter, r *http.Request) {
 
 	roles := rbac.OrganizationRoles(organization.ID)
 	dbCustomRoles, err := api.Database.CustomRoles(ctx, database.CustomRolesParams{
-		LookupRoles:     nil,
-		ExcludeOrgRoles: false,
-		OrganizationID:  organization.ID,
+		LookupRoles:        nil,
+		ExcludeOrgRoles:    false,
+		OrganizationID:     organization.ID,
+		IncludeSystemRoles: false,
 	})
 	if err != nil {
 		httpapi.InternalServerError(rw, err)

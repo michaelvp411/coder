@@ -1,16 +1,15 @@
-import type { TemplateVersionExternalAuth } from "api/typesGenerated";
-import { Badge } from "components/Badge/Badge";
-import { Button } from "components/Button/Button";
-import { ExternalImage } from "components/ExternalImage/ExternalImage";
-import { Spinner } from "components/Spinner/Spinner";
+import { CheckIcon, RedoIcon } from "lucide-react";
+import type { FC } from "react";
+import type { TemplateVersionExternalAuth } from "#/api/typesGenerated";
+import { Badge } from "#/components/Badge/Badge";
+import { Button } from "#/components/Button/Button";
+import { ExternalImage } from "#/components/ExternalImage/ExternalImage";
+import { Spinner } from "#/components/Spinner/Spinner";
 import {
 	Tooltip,
 	TooltipContent,
-	TooltipProvider,
 	TooltipTrigger,
-} from "components/Tooltip/Tooltip";
-import { Check, Redo } from "lucide-react";
-import type { FC } from "react";
+} from "#/components/Tooltip/Tooltip";
 
 interface ExternalAuthButtonProps {
 	auth: TemplateVersionExternalAuth;
@@ -39,11 +38,7 @@ export const ExternalAuthButton: FC<ExternalAuthButtonProps> = ({
 				)}
 				<p className="font-semibold text-sm m-0">{auth.display_name}</p>
 				{!auth.authenticated && !auth.optional && (
-					<Badge
-						size="sm"
-						border="none"
-						variant={error ? "destructive" : "warning"}
-					>
+					<Badge size="sm" variant={error ? "destructive" : "warning"}>
 						Required
 					</Badge>
 				)}
@@ -52,7 +47,7 @@ export const ExternalAuthButton: FC<ExternalAuthButtonProps> = ({
 			<span className="flex flex-row items-center gap-2">
 				{auth.authenticated ? (
 					<>
-						<Check className="w-4 h-4 text-content-success" />
+						<CheckIcon className="w-4 h-4 text-content-success" />
 						<p className="text-xs font-semibold text-content-secondary m-0">
 							Authenticated
 						</p>
@@ -77,19 +72,17 @@ export const ExternalAuthButton: FC<ExternalAuthButtonProps> = ({
 				)}
 
 				{displayRetry && !auth.authenticated && (
-					<TooltipProvider>
-						<Tooltip delayDuration={100}>
-							<TooltipTrigger asChild>
-								<Button variant="outline" size="icon" onClick={onStartPolling}>
-									<Redo />
-									<span className="sr-only">Refresh external auth</span>
-								</Button>
-							</TooltipTrigger>
-							<TooltipContent>
-								Retry login with {auth.display_name}
-							</TooltipContent>
-						</Tooltip>
-					</TooltipProvider>
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button variant="outline" size="icon" onClick={onStartPolling}>
+								<RedoIcon />
+								<span className="sr-only">Refresh external auth</span>
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent>
+							Retry login with {auth.display_name}
+						</TooltipContent>
+					</Tooltip>
 				)}
 			</span>
 		</div>

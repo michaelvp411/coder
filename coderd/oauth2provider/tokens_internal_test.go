@@ -3,12 +3,19 @@ package oauth2provider
 import (
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/coder/coder/v2/codersdk"
 )
+
+// parseScopes parses a space-delimited scope string into a slice of scopes
+// per RFC 6749.
+func parseScopes(scope string) []string {
+	return strings.Fields(strings.TrimSpace(scope))
+}
 
 // TestExtractTokenParams_Scopes tests OAuth2 scope parameter parsing
 // to ensure RFC 6749 compliance where scopes are space-delimited
@@ -115,15 +122,15 @@ func TestExtractTokenParams_Scopes(t *testing.T) {
 				Form:     form, // Form is the combination of PostForm and URL query
 			}
 
-			// Extract token params
-			params, validationErrs, err := extractTokenParams(req, callbackURL)
+			// Extract token request
+			tokenReq, validationErrs, err := extractTokenRequest(req, callbackURL)
 
 			// Verify no errors occurred
-			require.NoError(t, err, "extractTokenParams should not return error for: %s", tc.description)
+			require.NoError(t, err, "extractTokenRequest should not return error for: %s", tc.description)
 			require.Empty(t, validationErrs, "should have no validation errors for: %s", tc.description)
 
 			// Verify scopes match expected
-			require.Equal(t, tc.expectedScopes, params.scopes, "scope parsing failed for: %s", tc.description)
+			require.Equal(t, tc.expectedScopes, parseScopes(tokenReq.Scope), "scope parsing failed for: %s", tc.description)
 		})
 	}
 }
@@ -178,15 +185,15 @@ func TestExtractTokenParams_ScopesURLEncoded(t *testing.T) {
 				Form:     values,
 			}
 
-			// Extract token params
-			params, validationErrs, err := extractTokenParams(req, callbackURL)
+			// Extract token request
+			tokenReq, validationErrs, err := extractTokenRequest(req, callbackURL)
 
 			// Verify no errors
 			require.NoError(t, err)
 			require.Empty(t, validationErrs)
 
 			// Verify scopes
-			require.Equal(t, tc.expectedScopes, params.scopes)
+			require.Equal(t, tc.expectedScopes, parseScopes(tokenReq.Scope))
 		})
 	}
 }
@@ -259,11 +266,11 @@ func TestExtractTokenParams_ScopesEdgeCases(t *testing.T) {
 				Form:     form,
 			}
 
-			params, validationErrs, err := extractTokenParams(req, callbackURL)
+			tokenReq, validationErrs, err := extractTokenRequest(req, callbackURL)
 
-			require.NoError(t, err, "extractTokenParams should not error for: %s", tc.description)
+			require.NoError(t, err, "extractTokenRequest should not error for: %s", tc.description)
 			require.Empty(t, validationErrs)
-			require.Equal(t, tc.expectedScopes, params.scopes, "scope mismatch for: %s", tc.description)
+			require.Equal(t, tc.expectedScopes, parseScopes(tokenReq.Scope), "scope mismatch for: %s", tc.description)
 		})
 	}
 }
@@ -311,6 +318,7 @@ func TestExtractAuthorizeParams_Scopes(t *testing.T) {
 			query.Set("response_type", "code")
 			query.Set("client_id", "test-client")
 			query.Set("redirect_uri", "http://localhost:3000/callback")
+			query.Set("code_challenge", "test-challenge")
 			if tc.scopeParam != "" {
 				query.Set("scope", tc.scopeParam)
 			}
@@ -334,6 +342,34 @@ func TestExtractAuthorizeParams_Scopes(t *testing.T) {
 	}
 }
 
+// TestExtractAuthorizeParams_TokenResponseTypeDoesNotRequirePKCE ensures
+// response_type=token is parsed without requiring PKCE fields so callers can
+// return unsupported_response_type instead of invalid_request.
+func TestExtractAuthorizeParams_TokenResponseTypeDoesNotRequirePKCE(t *testing.T) {
+	t.Parallel()
+
+	callbackURL, err := url.Parse("http://localhost:3000/callback")
+	require.NoError(t, err)
+
+	query := url.Values{}
+	query.Set("response_type", string(codersdk.OAuth2ProviderResponseTypeToken))
+	query.Set("client_id", "test-client")
+	query.Set("redirect_uri", "http://localhost:3000/callback")
+
+	reqURL, err := url.Parse("http://localhost:8080/oauth2/authorize?" + query.Encode())
+	require.NoError(t, err)
+
+	req := &http.Request{
+		Method: http.MethodGet,
+		URL:    reqURL,
+	}
+
+	params, validationErrs, err := extractAuthorizeParams(req, callbackURL)
+	require.NoError(t, err)
+	require.Empty(t, validationErrs)
+	require.Equal(t, codersdk.OAuth2ProviderResponseTypeToken, params.responseType)
+}
+
 // TestRefreshTokenGrant_Scopes tests that scopes can be requested during refresh
 func TestRefreshTokenGrant_Scopes(t *testing.T) {
 	t.Parallel()
@@ -354,10 +390,10 @@ func TestRefreshTokenGrant_Scopes(t *testing.T) {
 		Form:     form,
 	}
 
-	params, validationErrs, err := extractTokenParams(req, callbackURL)
+	tokenReq, validationErrs, err := extractTokenRequest(req, callbackURL)
 
 	require.NoError(t, err)
 	require.Empty(t, validationErrs)
-	require.Equal(t, codersdk.OAuth2ProviderGrantTypeRefreshToken, params.grantType)
-	require.Equal(t, []string{"reduced:scope", "subset:scope"}, params.scopes)
+	require.Equal(t, codersdk.OAuth2ProviderGrantTypeRefreshToken, tokenReq.GrantType)
+	require.Equal(t, []string{"reduced:scope", "subset:scope"}, parseScopes(tokenReq.Scope))
 }

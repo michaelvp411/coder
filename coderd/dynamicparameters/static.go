@@ -9,8 +9,8 @@ import (
 	"golang.org/x/xerrors"
 
 	"github.com/coder/coder/v2/coderd/database"
-	"github.com/coder/coder/v2/coderd/database/db2sdk"
 	"github.com/coder/coder/v2/coderd/util/ptr"
+	"github.com/coder/coder/v2/coderd/util/slice"
 	sdkproto "github.com/coder/coder/v2/provisionersdk/proto"
 	"github.com/coder/preview"
 	previewtypes "github.com/coder/preview/types"
@@ -27,7 +27,7 @@ func (r *loader) staticRender(ctx context.Context, db database.Store) (*staticRe
 		return nil, xerrors.Errorf("template version parameters: %w", err)
 	}
 
-	params := db2sdk.List(dbTemplateVersionParameters, TemplateVersionParameter)
+	params := slice.List(dbTemplateVersionParameters, TemplateVersionParameter)
 
 	for i, param := range params {
 		// Update the diagnostics to validate the 'default' value.
@@ -39,7 +39,7 @@ func (r *loader) staticRender(ctx context.Context, db database.Store) (*staticRe
 	}, nil
 }
 
-func (r *staticRender) Render(_ context.Context, _ uuid.UUID, values map[string]string) (*preview.Output, hcl.Diagnostics) {
+func (r *staticRender) Render(_ context.Context, _ uuid.UUID, values map[string]string, _ ...RenderOption) (*RenderResult, hcl.Diagnostics) {
 	params := r.staticParams
 	for i := range params {
 		param := &params[i]
@@ -52,8 +52,10 @@ func (r *staticRender) Render(_ context.Context, _ uuid.UUID, values map[string]
 		param.Diagnostics = previewtypes.Diagnostics(param.Valid(param.Value))
 	}
 
-	return &preview.Output{
-			Parameters: params,
+	return &RenderResult{
+			Output: &preview.Output{
+				Parameters: params,
+			},
 		}, hcl.Diagnostics{
 			{
 				// Only a warning because the form does still work.

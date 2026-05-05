@@ -6,6 +6,9 @@ const (
 	APIKeyScopeAll APIKeyScope = "all"
 	// Deprecated: use codersdk.APIKeyScopeCoderApplicationConnect instead.
 	APIKeyScopeApplicationConnect                  APIKeyScope = "application_connect"
+	APIKeyScopeAiSeatAll                           APIKeyScope = "ai_seat:*"
+	APIKeyScopeAiSeatCreate                        APIKeyScope = "ai_seat:create"
+	APIKeyScopeAiSeatRead                          APIKeyScope = "ai_seat:read"
 	APIKeyScopeAibridgeInterceptionAll             APIKeyScope = "aibridge_interception:*"
 	APIKeyScopeAibridgeInterceptionCreate          APIKeyScope = "aibridge_interception:create"
 	APIKeyScopeAibridgeInterceptionRead            APIKeyScope = "aibridge_interception:read"
@@ -29,6 +32,15 @@ const (
 	APIKeyScopeAuditLogAll                         APIKeyScope = "audit_log:*"
 	APIKeyScopeAuditLogCreate                      APIKeyScope = "audit_log:create"
 	APIKeyScopeAuditLogRead                        APIKeyScope = "audit_log:read"
+	APIKeyScopeBoundaryUsageAll                    APIKeyScope = "boundary_usage:*"
+	APIKeyScopeBoundaryUsageDelete                 APIKeyScope = "boundary_usage:delete"
+	APIKeyScopeBoundaryUsageRead                   APIKeyScope = "boundary_usage:read"
+	APIKeyScopeBoundaryUsageUpdate                 APIKeyScope = "boundary_usage:update"
+	APIKeyScopeChatAll                             APIKeyScope = "chat:*"
+	APIKeyScopeChatCreate                          APIKeyScope = "chat:create"
+	APIKeyScopeChatDelete                          APIKeyScope = "chat:delete"
+	APIKeyScopeChatRead                            APIKeyScope = "chat:read"
+	APIKeyScopeChatUpdate                          APIKeyScope = "chat:update"
 	APIKeyScopeCoderAll                            APIKeyScope = "coder:all"
 	APIKeyScopeCoderApikeysManageSelf              APIKeyScope = "coder:apikeys.manage_self"
 	APIKeyScopeCoderApplicationConnect             APIKeyScope = "coder:application_connect"
@@ -177,6 +189,7 @@ const (
 	APIKeyScopeWorkspaceStart                      APIKeyScope = "workspace:start"
 	APIKeyScopeWorkspaceStop                       APIKeyScope = "workspace:stop"
 	APIKeyScopeWorkspaceUpdate                     APIKeyScope = "workspace:update"
+	APIKeyScopeWorkspaceUpdateAgent                APIKeyScope = "workspace:update_agent"
 	APIKeyScopeWorkspaceAgentDevcontainersAll      APIKeyScope = "workspace_agent_devcontainers:*"
 	APIKeyScopeWorkspaceAgentDevcontainersCreate   APIKeyScope = "workspace_agent_devcontainers:create"
 	APIKeyScopeWorkspaceAgentResourceMonitorAll    APIKeyScope = "workspace_agent_resource_monitor:*"
@@ -195,6 +208,7 @@ const (
 	APIKeyScopeWorkspaceDormantStart               APIKeyScope = "workspace_dormant:start"
 	APIKeyScopeWorkspaceDormantStop                APIKeyScope = "workspace_dormant:stop"
 	APIKeyScopeWorkspaceDormantUpdate              APIKeyScope = "workspace_dormant:update"
+	APIKeyScopeWorkspaceDormantUpdateAgent         APIKeyScope = "workspace_dormant:update_agent"
 	APIKeyScopeWorkspaceProxyAll                   APIKeyScope = "workspace_proxy:*"
 	APIKeyScopeWorkspaceProxyCreate                APIKeyScope = "workspace_proxy:create"
 	APIKeyScopeWorkspaceProxyDelete                APIKeyScope = "workspace_proxy:delete"
@@ -221,6 +235,10 @@ var PublicAPIKeyScopes = []APIKeyScope{
 	APIKeyScopeFileAll,
 	APIKeyScopeFileCreate,
 	APIKeyScopeFileRead,
+	APIKeyScopeOrganizationAll,
+	APIKeyScopeOrganizationDelete,
+	APIKeyScopeOrganizationRead,
+	APIKeyScopeOrganizationUpdate,
 	APIKeyScopeTaskAll,
 	APIKeyScopeTaskCreate,
 	APIKeyScopeTaskDelete,
@@ -232,6 +250,7 @@ var PublicAPIKeyScopes = []APIKeyScope{
 	APIKeyScopeTemplateRead,
 	APIKeyScopeTemplateUpdate,
 	APIKeyScopeTemplateUse,
+	APIKeyScopeUserRead,
 	APIKeyScopeUserReadPersonal,
 	APIKeyScopeUserUpdatePersonal,
 	APIKeyScopeUserSecretAll,

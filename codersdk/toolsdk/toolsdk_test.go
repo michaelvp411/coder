@@ -20,14 +20,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
-
-	"github.com/coder/aisdk-go"
+	"golang.org/x/xerrors"
 
 	agentapi "github.com/coder/agentapi-sdk-go"
+	"github.com/coder/aisdk-go"
 	"github.com/coder/coder/v2/agent"
 	"github.com/coder/coder/v2/agent/agenttest"
 	"github.com/coder/coder/v2/coderd/coderdtest"
 	"github.com/coder/coder/v2/coderd/database"
+	"github.com/coder/coder/v2/coderd/database/dbauthz"
 	"github.com/coder/coder/v2/coderd/database/dbfake"
 	"github.com/coder/coder/v2/coderd/database/dbgen"
 	"github.com/coder/coder/v2/coderd/httpapi"
@@ -44,6 +45,14 @@ import (
 // nolint:gocritic // This is in a test package and does not end up in the build
 func setupWorkspaceForAgent(t *testing.T, opts *coderdtest.Options) (*codersdk.Client, database.WorkspaceTable, string) {
 	t.Helper()
+	return setupWorkspaceForAgentWithName(t, opts, "myworkspace")
+}
+
+// setupWorkspaceForAgentWithName creates a workspace setup exactly like main
+// SSH tests, but with a caller-provided workspace name.
+// nolint:gocritic // This is in a test package and does not end up in the build
+func setupWorkspaceForAgentWithName(t *testing.T, opts *coderdtest.Options, workspaceName string) (*codersdk.Client, database.WorkspaceTable, string) {
+	t.Helper()
 
 	client, store := coderdtest.NewWithDatabase(t, opts)
 	client.SetLogger(testutil.Logger(t).Named("client"))
@@ -53,12 +62,105 @@ func setupWorkspaceForAgent(t *testing.T, opts *coderdtest.Options) (*codersdk.C
 	})
 	// nolint:gocritic // This is in a test package and does not end up in the build
 	r := dbfake.WorkspaceBuild(t, store, database.WorkspaceTable{
-		Name:           "myworkspace",
+		Name:           workspaceName,
 		OrganizationID: first.OrganizationID,
 		OwnerID:        user.ID,
 	}).WithAgent().Do()
 
 	return userClient, r.Workspace, r.AgentToken
+}
+
+type recordingAgentConnFunc struct {
+	conn    workspacesdk.AgentConn
+	err     error
+	agentID uuid.UUID
+	calls   int
+}
+
+func (d *recordingAgentConnFunc) AgentConn(_ context.Context, agentID uuid.UUID) (workspacesdk.AgentConn, func(), error) {
+	d.calls++
+	d.agentID = agentID
+	if d.err != nil {
+		return nil, nil, d.err
+	}
+	return d.conn, nil, nil
+}
+
+// These tests are dependent on the state of the coder server.
+// Running them in parallel is prone to racy behavior.
+// nolint:tparallel,paralleltest
+func TestGenericToolMCPAnnotations(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		toolName        string
+		readOnlyHint    bool
+		destructiveHint bool
+		idempotentHint  bool
+		openWorldHint   bool
+	}{
+		{
+			name:            "ReadOnlyTool",
+			toolName:        toolsdk.ToolNameGetAuthenticatedUser,
+			readOnlyHint:    true,
+			destructiveHint: false,
+			idempotentHint:  true,
+			openWorldHint:   false,
+		},
+		{
+			name:            "DestructiveTool",
+			toolName:        toolsdk.ToolNameWorkspaceWriteFile,
+			readOnlyHint:    false,
+			destructiveHint: true,
+			idempotentHint:  false,
+			openWorldHint:   false,
+		},
+		{
+			name:            "MutatingTool",
+			toolName:        toolsdk.ToolNameCreateWorkspace,
+			readOnlyHint:    false,
+			destructiveHint: false,
+			idempotentHint:  false,
+			openWorldHint:   false,
+		},
+		{
+			name:            "PortForwardIsReadOnly",
+			toolName:        toolsdk.ToolNameWorkspacePortForward,
+			readOnlyHint:    true,
+			destructiveHint: false,
+			idempotentHint:  true,
+			openWorldHint:   false,
+		},
+		{
+			name:            "GetTemplateIsReadOnly",
+			toolName:        toolsdk.ToolNameGetTemplate,
+			readOnlyHint:    true,
+			destructiveHint: false,
+			idempotentHint:  true,
+			openWorldHint:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		tc := tt
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var found *toolsdk.GenericTool
+			for i := range toolsdk.All {
+				if toolsdk.All[i].Name == tc.toolName {
+					found = &toolsdk.All[i]
+					break
+				}
+			}
+			require.NotNil(t, found)
+			assert.Equal(t, tc.readOnlyHint, found.MCPAnnotations.ReadOnlyHint)
+			assert.Equal(t, tc.destructiveHint, found.MCPAnnotations.DestructiveHint)
+			assert.Equal(t, tc.idempotentHint, found.MCPAnnotations.IdempotentHint)
+			assert.Equal(t, tc.openWorldHint, found.MCPAnnotations.OpenWorldHint)
+		})
+	}
 }
 
 // These tests are dependent on the state of the coder server.
@@ -84,6 +186,12 @@ func TestTools(t *testing.T) {
 		}
 		return agents
 	}).Do()
+	preset := dbgen.Preset(t, store, database.InsertPresetParams{
+		TemplateVersionID: r.TemplateVersion.ID,
+		Name:              testutil.GetRandomNameHyphenated(t),
+		CreatedAt:         r.TemplateVersion.CreatedAt,
+		Description:       "Preset for agent tool tests.",
+	})
 
 	// Given: a client configured with the agent token.
 	agentClient := agentsdk.New(client.URL, agentsdk.WithFixedToken(r.AgentToken))
@@ -106,8 +214,9 @@ func TestTools(t *testing.T) {
 	})
 
 	t.Run("ReportTask", func(t *testing.T) {
+		ctx := testutil.Context(t, testutil.WaitShort)
 		tb, err := toolsdk.NewDeps(memberClient, toolsdk.WithTaskReporter(func(args toolsdk.ReportTaskArgs) error {
-			return agentClient.PatchAppStatus(setupCtx, agentsdk.PatchAppStatus{
+			return agentClient.PatchAppStatus(ctx, agentsdk.PatchAppStatus{
 				AppSlug: "some-agent-app",
 				Message: args.Summary,
 				URI:     args.Link,
@@ -126,12 +235,57 @@ func TestTools(t *testing.T) {
 	t.Run("GetWorkspace", func(t *testing.T) {
 		tb, err := toolsdk.NewDeps(memberClient)
 		require.NoError(t, err)
-		result, err := testTool(t, toolsdk.GetWorkspace, tb, toolsdk.GetWorkspaceArgs{
-			WorkspaceID: r.Workspace.ID.String(),
-		})
 
+		tests := []struct {
+			name      string
+			workspace string
+		}{
+			{
+				name:      "ByID",
+				workspace: r.Workspace.ID.String(),
+			},
+			{
+				name:      "ByName",
+				workspace: r.Workspace.Name,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				result, err := testTool(t, toolsdk.GetWorkspace, tb, toolsdk.GetWorkspaceArgs{
+					WorkspaceID: tt.workspace,
+				})
+				require.NoError(t, err)
+				require.Equal(t, r.Workspace.ID, result.ID, "expected the workspace ID to match")
+			})
+		}
+	})
+
+	t.Run("GetWorkspace_ByUUIDLikeName", func(t *testing.T) {
+		t.Parallel()
+
+		// Regression test: a workspace whose name is a valid dashless
+		// UUID should resolve correctly. Previously, the handler would
+		// parse the name as a UUID, get a 404 from the ID-based lookup,
+		// and never fall back to name-based lookup.
+		const uuidLikeName = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6"
+		// nolint:gocritic // This is in a test package and does not end up in the build
+		uuidWorkspace := dbfake.WorkspaceBuild(t, store, database.WorkspaceTable{
+			OrganizationID: owner.OrganizationID,
+			OwnerID:        member.ID,
+			Name:           uuidLikeName,
+		}).Do()
+
+		tb, err := toolsdk.NewDeps(memberClient)
 		require.NoError(t, err)
-		require.Equal(t, r.Workspace.ID, result.ID, "expected the workspace ID to match")
+
+		result, err := testTool(t, toolsdk.GetWorkspace, tb, toolsdk.GetWorkspaceArgs{
+			WorkspaceID: uuidLikeName,
+		})
+		require.NoError(t, err)
+		require.Equal(t, uuidWorkspace.Workspace.ID, result.ID)
 	})
 
 	t.Run("ListTemplates", func(t *testing.T) {
@@ -264,6 +418,169 @@ func TestTools(t *testing.T) {
 			// Cancel the build so it doesn't remain in the 'pending' state indefinitely.
 			require.NoError(t, client.CancelWorkspaceBuild(ctx, rollbackBuild.ID, codersdk.CancelWorkspaceBuildParams{}))
 		})
+
+		t.Run("Start_WithPreset", func(t *testing.T) {
+			ctx := testutil.Context(t, testutil.WaitShort)
+			tb, err := toolsdk.NewDeps(memberClient)
+			require.NoError(t, err)
+
+			result, err := testTool(t, toolsdk.CreateWorkspaceBuild, tb, toolsdk.CreateWorkspaceBuildArgs{
+				WorkspaceID:             r.Workspace.ID.String(),
+				Transition:              "start",
+				TemplateVersionPresetID: preset.ID.String(),
+			})
+			require.NoError(t, err)
+			require.Equal(t, codersdk.WorkspaceTransitionStart, result.Transition)
+			require.Equal(t, r.Workspace.ID, result.WorkspaceID)
+			require.NotNil(t, result.TemplateVersionPresetID,
+				"build must record the preset ID supplied to create_workspace_build")
+			require.Equal(t, preset.ID, *result.TemplateVersionPresetID)
+
+			require.NoError(t, client.CancelWorkspaceBuild(ctx, result.ID, codersdk.CancelWorkspaceBuildParams{}))
+		})
+
+		t.Run("Start_WithRichParameters", func(t *testing.T) {
+			ctx := testutil.Context(t, testutil.WaitShort)
+			// Isolated fixture: a template version with one rich
+			// parameter, so rich_parameters has something to bind
+			// to. The shared `r` fixture has no parameters.
+			rpBuild := dbfake.WorkspaceBuild(t, store, database.WorkspaceTable{
+				OrganizationID: owner.OrganizationID,
+				OwnerID:        member.ID,
+			}).Do()
+			dbgen.TemplateVersionParameter(t, store, database.TemplateVersionParameter{
+				TemplateVersionID: rpBuild.TemplateVersion.ID,
+				Name:              "region",
+				Description:       "Region to deploy in.",
+				Type:              "string",
+				DefaultValue:      "us-east-1",
+				Required:          false,
+				Mutable:           true,
+			})
+
+			tb, err := toolsdk.NewDeps(memberClient)
+			require.NoError(t, err)
+			result, err := testTool(t, toolsdk.CreateWorkspaceBuild, tb, toolsdk.CreateWorkspaceBuildArgs{
+				WorkspaceID:    rpBuild.Workspace.ID.String(),
+				Transition:     "start",
+				RichParameters: map[string]string{"region": "us-west-2"},
+			})
+			require.NoError(t, err)
+			require.Equal(t, codersdk.WorkspaceTransitionStart, result.Transition)
+
+			params, err := memberClient.WorkspaceBuildParameters(ctx, result.ID)
+			require.NoError(t, err)
+			require.Len(t, params, 1)
+			require.Equal(t, "region", params[0].Name)
+			require.Equal(t, "us-west-2", params[0].Value)
+
+			require.NoError(t, client.CancelWorkspaceBuild(ctx, result.ID, codersdk.CancelWorkspaceBuildParams{}))
+		})
+
+		t.Run("Start_WithPresetAndParams", func(t *testing.T) {
+			ctx := testutil.Context(t, testutil.WaitShort)
+			// Isolated fixture: a template version with a parameter
+			// and a preset that sets it. Asserts the documented
+			// override direction: when preset and rich_parameters
+			// conflict, the preset value wins. Mirrors the
+			// CreateWorkspace/WithPresetAndParams contract.
+			ovBuild := dbfake.WorkspaceBuild(t, store, database.WorkspaceTable{
+				OrganizationID: owner.OrganizationID,
+				OwnerID:        member.ID,
+			}).Do()
+			dbgen.TemplateVersionParameter(t, store, database.TemplateVersionParameter{
+				TemplateVersionID: ovBuild.TemplateVersion.ID,
+				Name:              "region",
+				Description:       "Region to deploy in.",
+				Type:              "string",
+				DefaultValue:      "us-east-1",
+				Required:          false,
+				Mutable:           true,
+			})
+			ovPreset := dbgen.Preset(t, store, database.InsertPresetParams{
+				TemplateVersionID: ovBuild.TemplateVersion.ID,
+				Name:              testutil.GetRandomNameHyphenated(t),
+				CreatedAt:         ovBuild.TemplateVersion.CreatedAt,
+				Description:       "Preset for build override test.",
+			})
+			dbgen.PresetParameter(t, store, database.InsertPresetParametersParams{
+				TemplateVersionPresetID: ovPreset.ID,
+				Names:                   []string{"region"},
+				Values:                  []string{"us-west-2"},
+			})
+
+			tb, err := toolsdk.NewDeps(memberClient)
+			require.NoError(t, err)
+			result, err := testTool(t, toolsdk.CreateWorkspaceBuild, tb, toolsdk.CreateWorkspaceBuildArgs{
+				WorkspaceID:             ovBuild.Workspace.ID.String(),
+				Transition:              "start",
+				TemplateVersionPresetID: ovPreset.ID.String(),
+				RichParameters:          map[string]string{"region": "us-east-1"},
+			})
+			require.NoError(t, err)
+			require.NotNil(t, result.TemplateVersionPresetID)
+			require.Equal(t, ovPreset.ID, *result.TemplateVersionPresetID)
+
+			params, err := memberClient.WorkspaceBuildParameters(ctx, result.ID)
+			require.NoError(t, err)
+			require.Len(t, params, 1)
+			require.Equal(t, "region", params[0].Name)
+			require.Equal(t, "us-west-2", params[0].Value,
+				"preset parameter value must override conflicting rich_parameters entry")
+
+			require.NoError(t, client.CancelWorkspaceBuild(ctx, result.ID, codersdk.CancelWorkspaceBuildParams{}))
+		})
+
+		t.Run("RejectsPresetOnStop", func(t *testing.T) {
+			tb, err := toolsdk.NewDeps(memberClient)
+			require.NoError(t, err)
+			_, err = testTool(t, toolsdk.CreateWorkspaceBuild, tb, toolsdk.CreateWorkspaceBuildArgs{
+				WorkspaceID:             r.Workspace.ID.String(),
+				Transition:              "stop",
+				TemplateVersionPresetID: preset.ID.String(),
+			})
+			require.ErrorContains(t, err, "template_version_preset_id is only valid for start")
+		})
+
+		t.Run("RejectsParamsOnDelete", func(t *testing.T) {
+			tb, err := toolsdk.NewDeps(memberClient)
+			require.NoError(t, err)
+			_, err = testTool(t, toolsdk.CreateWorkspaceBuild, tb, toolsdk.CreateWorkspaceBuildArgs{
+				WorkspaceID:    r.Workspace.ID.String(),
+				Transition:     "delete",
+				RichParameters: map[string]string{"region": "us-west-2"},
+			})
+			require.ErrorContains(t, err, "rich_parameters is only valid for start")
+		})
+
+		t.Run("RejectsBothOnStop", func(t *testing.T) {
+			// Both fields set on a non-start transition. The
+			// handler must surface both violations via errors.Join
+			// so agents fix both in one round-trip rather than
+			// fix-one, retry, hit-the-next.
+			tb, err := toolsdk.NewDeps(memberClient)
+			require.NoError(t, err)
+			_, err = testTool(t, toolsdk.CreateWorkspaceBuild, tb, toolsdk.CreateWorkspaceBuildArgs{
+				WorkspaceID:             r.Workspace.ID.String(),
+				Transition:              "stop",
+				TemplateVersionPresetID: preset.ID.String(),
+				RichParameters:          map[string]string{"region": "us-west-2"},
+			})
+			require.Error(t, err)
+			require.ErrorContains(t, err, "template_version_preset_id is only valid for start")
+			require.ErrorContains(t, err, "rich_parameters is only valid for start")
+		})
+
+		t.Run("InvalidPresetID", func(t *testing.T) {
+			tb, err := toolsdk.NewDeps(memberClient)
+			require.NoError(t, err)
+			_, err = testTool(t, toolsdk.CreateWorkspaceBuild, tb, toolsdk.CreateWorkspaceBuildArgs{
+				WorkspaceID:             r.Workspace.ID.String(),
+				Transition:              "start",
+				TemplateVersionPresetID: "not-a-uuid",
+			})
+			require.ErrorContains(t, err, "template_version_preset_id must be a valid UUID")
+		})
 	})
 
 	t.Run("ListTemplateVersionParameters", func(t *testing.T) {
@@ -275,6 +592,129 @@ func TestTools(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Empty(t, params)
+	})
+
+	t.Run("GetTemplate", func(t *testing.T) {
+		// Build an isolated fixture so the existing fixture's
+		// assertions (no parameters, single preset with no
+		// preset parameters) stay intact.
+		gtBuild := dbfake.WorkspaceBuild(t, store, database.WorkspaceTable{
+			OrganizationID: owner.OrganizationID,
+			OwnerID:        member.ID,
+		}).Do()
+		// Add a rich parameter to the active version so
+		// `parameters` is non-empty in the response.
+		dbgen.TemplateVersionParameter(t, store, database.TemplateVersionParameter{
+			TemplateVersionID: gtBuild.TemplateVersion.ID,
+			Name:              "region",
+			DisplayName:       "Region",
+			Description:       "Region to deploy in.",
+			Type:              "string",
+			DefaultValue:      "us-east-1",
+			Required:          false,
+			Mutable:           true,
+		})
+		// Attach a preset with one parameter so we can assert
+		// PresetParameters round-trip end-to-end.
+		const gtPresetDesiredPrebuildInstances = 3
+		gtPreset := dbgen.Preset(t, store, database.InsertPresetParams{
+			TemplateVersionID: gtBuild.TemplateVersion.ID,
+			Name:              testutil.GetRandomNameHyphenated(t),
+			CreatedAt:         gtBuild.TemplateVersion.CreatedAt,
+			Description:       "Preset for GetTemplate tests.",
+			DesiredInstances: sql.NullInt32{
+				Int32: gtPresetDesiredPrebuildInstances,
+				Valid: true,
+			},
+		})
+		dbgen.PresetParameter(t, store, database.InsertPresetParametersParams{
+			TemplateVersionPresetID: gtPreset.ID,
+			Names:                   []string{"region"},
+			Values:                  []string{"us-west-2"},
+		})
+
+		// A second template with no presets, used to assert
+		// the omit-when-empty behavior of the `presets` field.
+		gtNoPresetBuild := dbfake.WorkspaceBuild(t, store, database.WorkspaceTable{
+			OrganizationID: owner.OrganizationID,
+			OwnerID:        member.ID,
+		}).Do()
+
+		t.Run("WithPresets", func(t *testing.T) {
+			tb, err := toolsdk.NewDeps(memberClient)
+			require.NoError(t, err)
+
+			result, err := testTool(t, toolsdk.GetTemplate, tb, toolsdk.GetTemplateArgs{
+				TemplateID: gtBuild.Template.ID.String(),
+			})
+			require.NoError(t, err)
+
+			// MinimalTemplate fields populated.
+			require.Equal(t, gtBuild.Template.ID.String(), result.ID)
+			require.Equal(t, gtBuild.Template.Name, result.Name)
+			require.Equal(t, gtBuild.Template.ActiveVersionID, result.ActiveVersionID)
+
+			// Parameters round-trip from the active version.
+			require.Len(t, result.Parameters, 1)
+			require.Equal(t, "region", result.Parameters[0].Name)
+			require.Equal(t, "us-east-1", result.Parameters[0].DefaultValue)
+
+			// Presets and their parameters round-trip.
+			require.Len(t, result.Presets, 1)
+			require.Equal(t, gtPreset.ID, result.Presets[0].ID)
+			require.Equal(t, gtPreset.Name, result.Presets[0].Name)
+			require.Equal(t, "Preset for GetTemplate tests.", result.Presets[0].Description)
+			require.Len(t, result.Presets[0].Parameters, 1)
+			require.Equal(t, "region", result.Presets[0].Parameters[0].Name)
+			require.Equal(t, "us-west-2", result.Presets[0].Parameters[0].Value)
+
+			// DesiredPrebuildInstances round-trips through toPresetView.
+			// The tool description tells the LLM to prefer presets with
+			// desired_prebuild_instances > 0; if this field stops
+			// flowing, that hint silently breaks.
+			require.NotNil(t, result.Presets[0].DesiredPrebuildInstances,
+				"desired_prebuild_instances should be populated when the preset has DesiredInstances")
+			require.EqualValues(t, gtPresetDesiredPrebuildInstances, *result.Presets[0].DesiredPrebuildInstances)
+		})
+
+		t.Run("WithoutPresets", func(t *testing.T) {
+			tb, err := toolsdk.NewDeps(memberClient)
+			require.NoError(t, err)
+
+			result, err := testTool(t, toolsdk.GetTemplate, tb, toolsdk.GetTemplateArgs{
+				TemplateID: gtNoPresetBuild.Template.ID.String(),
+			})
+			require.NoError(t, err)
+
+			require.Equal(t, gtNoPresetBuild.Template.ID.String(), result.ID)
+			require.Empty(t, result.Presets, "presets should be empty when the template has none")
+
+			// The `presets` field should be absent from the
+			// JSON entirely when the template has no presets.
+			b, err := json.Marshal(result)
+			require.NoError(t, err)
+			require.NotContains(t, string(b), `"presets"`)
+		})
+
+		t.Run("InvalidID", func(t *testing.T) {
+			tb, err := toolsdk.NewDeps(memberClient)
+			require.NoError(t, err)
+
+			_, err = testTool(t, toolsdk.GetTemplate, tb, toolsdk.GetTemplateArgs{
+				TemplateID: "not-a-uuid",
+			})
+			require.ErrorContains(t, err, "template_id must be a valid UUID")
+		})
+
+		t.Run("NotFound", func(t *testing.T) {
+			tb, err := toolsdk.NewDeps(memberClient)
+			require.NoError(t, err)
+
+			_, err = testTool(t, toolsdk.GetTemplate, tb, toolsdk.GetTemplateArgs{
+				TemplateID: uuid.New().String(),
+			})
+			require.ErrorContains(t, err, "get template")
+		})
 	})
 
 	t.Run("GetWorkspaceAgentLogs", func(t *testing.T) {
@@ -393,18 +833,193 @@ func TestTools(t *testing.T) {
 	t.Run("CreateWorkspace", func(t *testing.T) {
 		tb, err := toolsdk.NewDeps(client)
 		require.NoError(t, err)
-		// We need a template version ID to create a workspace
-		res, err := testTool(t, toolsdk.CreateWorkspace, tb, toolsdk.CreateWorkspaceArgs{
-			User:              "me",
-			TemplateVersionID: r.TemplateVersion.ID.String(),
-			Name:              testutil.GetRandomNameHyphenated(t),
-			RichParameters:    map[string]string{},
+		t.Run("WithoutPreset", func(t *testing.T) {
+			res, err := testTool(t, toolsdk.CreateWorkspace, tb, toolsdk.CreateWorkspaceArgs{
+				User:              "me",
+				TemplateVersionID: r.TemplateVersion.ID.String(),
+				Name:              testutil.GetRandomNameHyphenated(t),
+				RichParameters:    map[string]string{},
+			})
+
+			require.NoError(t, err)
+			require.NotEmpty(t, res.ID, "expected a workspace ID")
 		})
 
-		// The creation might fail for various reasons, but the important thing is
-		// to mark it as tested
-		require.NoError(t, err)
-		require.NotEmpty(t, res.ID, "expected a workspace ID")
+		t.Run("WithPreset", func(t *testing.T) {
+			ctx := testutil.Context(t, testutil.WaitShort)
+			res, err := testTool(t, toolsdk.CreateWorkspace, tb, toolsdk.CreateWorkspaceArgs{
+				User:                    "me",
+				TemplateVersionID:       r.TemplateVersion.ID.String(),
+				TemplateVersionPresetID: preset.ID.String(),
+				Name:                    testutil.GetRandomNameHyphenated(t),
+				RichParameters:          map[string]string{},
+			})
+
+			require.NoError(t, err)
+			require.NotEmpty(t, res.ID, "expected a workspace ID")
+
+			build, err := client.WorkspaceBuild(ctx, res.LatestBuild.ID)
+			require.NoError(t, err)
+			require.NotNil(t, build.TemplateVersionPresetID)
+			require.Equal(t, preset.ID, *build.TemplateVersionPresetID)
+		})
+
+		t.Run("WithTemplateID", func(t *testing.T) {
+			// Exercises the template_id path on create_workspace,
+			// which lets the server resolve the active version
+			// atomically with the build. Mirrors how the chattool
+			// surface keys this tool.
+			res, err := testTool(t, toolsdk.CreateWorkspace, tb, toolsdk.CreateWorkspaceArgs{
+				User:           "me",
+				TemplateID:     r.Template.ID.String(),
+				Name:           testutil.GetRandomNameHyphenated(t),
+				RichParameters: map[string]string{},
+			})
+
+			require.NoError(t, err)
+			require.NotEmpty(t, res.ID, "expected a workspace ID")
+		})
+
+		t.Run("WithRichParameters", func(t *testing.T) {
+			ctx := testutil.Context(t, testutil.WaitShort)
+			// Isolated fixture: a template version with a single
+			// rich parameter, no preset. Confirms that
+			// rich_parameters round-trip on their own without
+			// being shadowed or overridden by preset auto-binding
+			// when no preset matches.
+			rpBuild := dbfake.WorkspaceBuild(t, store, database.WorkspaceTable{
+				OrganizationID: owner.OrganizationID,
+				OwnerID:        member.ID,
+			}).Do()
+			dbgen.TemplateVersionParameter(t, store, database.TemplateVersionParameter{
+				TemplateVersionID: rpBuild.TemplateVersion.ID,
+				Name:              "region",
+				Description:       "Region to deploy in.",
+				Type:              "string",
+				DefaultValue:      "us-east-1",
+				Required:          false,
+				Mutable:           true,
+			})
+
+			res, err := testTool(t, toolsdk.CreateWorkspace, tb, toolsdk.CreateWorkspaceArgs{
+				User:              "me",
+				TemplateVersionID: rpBuild.TemplateVersion.ID.String(),
+				Name:              testutil.GetRandomNameHyphenated(t),
+				RichParameters:    map[string]string{"region": "us-west-2"},
+			})
+			require.NoError(t, err)
+			require.NotEmpty(t, res.ID, "expected a workspace ID")
+
+			params, err := client.WorkspaceBuildParameters(ctx, res.LatestBuild.ID)
+			require.NoError(t, err)
+			require.Len(t, params, 1)
+			require.Equal(t, "region", params[0].Name)
+			require.Equal(t, "us-west-2", params[0].Value)
+		})
+
+		t.Run("RejectsBothIDs", func(t *testing.T) {
+			_, err := testTool(t, toolsdk.CreateWorkspace, tb, toolsdk.CreateWorkspaceArgs{
+				User:              "me",
+				TemplateID:        r.Template.ID.String(),
+				TemplateVersionID: r.TemplateVersion.ID.String(),
+				Name:              testutil.GetRandomNameHyphenated(t),
+				RichParameters:    map[string]string{},
+			})
+			require.ErrorContains(t, err, "exactly one of template_id or template_version_id")
+		})
+
+		t.Run("RejectsNeitherID", func(t *testing.T) {
+			_, err := testTool(t, toolsdk.CreateWorkspace, tb, toolsdk.CreateWorkspaceArgs{
+				User:           "me",
+				Name:           testutil.GetRandomNameHyphenated(t),
+				RichParameters: map[string]string{},
+			})
+			require.ErrorContains(t, err, "exactly one of template_id or template_version_id")
+		})
+
+		t.Run("WithPresetAndParams", func(t *testing.T) {
+			ctx := testutil.Context(t, testutil.WaitShort)
+			// Build an isolated fixture: a template version with one
+			// rich parameter and a preset that sets it. The shared
+			// fixture's preset has no parameters and would not exercise
+			// the override path.
+			ovBuild := dbfake.WorkspaceBuild(t, store, database.WorkspaceTable{
+				OrganizationID: owner.OrganizationID,
+				OwnerID:        member.ID,
+			}).Do()
+			dbgen.TemplateVersionParameter(t, store, database.TemplateVersionParameter{
+				TemplateVersionID: ovBuild.TemplateVersion.ID,
+				Name:              "region",
+				Description:       "Region to deploy in.",
+				Type:              "string",
+				DefaultValue:      "us-east-1",
+				Required:          false,
+				Mutable:           true,
+			})
+			ovPreset := dbgen.Preset(t, store, database.InsertPresetParams{
+				TemplateVersionID: ovBuild.TemplateVersion.ID,
+				Name:              testutil.GetRandomNameHyphenated(t),
+				CreatedAt:         ovBuild.TemplateVersion.CreatedAt,
+				Description:       "Preset for override test.",
+			})
+			dbgen.PresetParameter(t, store, database.InsertPresetParametersParams{
+				TemplateVersionPresetID: ovPreset.ID,
+				Names:                   []string{"region"},
+				Values:                  []string{"us-west-2"},
+			})
+
+			// Send conflicting rich_parameters; the preset value
+			// should win, per the contract advertised in the
+			// template_version_preset_id schema description.
+			res, err := testTool(t, toolsdk.CreateWorkspace, tb, toolsdk.CreateWorkspaceArgs{
+				User:                    "me",
+				TemplateVersionID:       ovBuild.TemplateVersion.ID.String(),
+				TemplateVersionPresetID: ovPreset.ID.String(),
+				Name:                    testutil.GetRandomNameHyphenated(t),
+				RichParameters:          map[string]string{"region": "us-east-1"},
+			})
+			require.NoError(t, err)
+			require.NotEmpty(t, res.ID, "expected a workspace ID")
+
+			// wsbuilder persists resolved parameters during the
+			// build transaction, before provisioning, so the values
+			// are readable immediately without waiting for the
+			// build job to complete.
+			params, err := client.WorkspaceBuildParameters(ctx, res.LatestBuild.ID)
+			require.NoError(t, err)
+			require.Len(t, params, 1)
+			require.Equal(t, "region", params[0].Name)
+			require.Equal(t, "us-west-2", params[0].Value,
+				"preset parameter value must override conflicting rich_parameters entry")
+		})
+
+		t.Run("RejectsInvalidTemplateID", func(t *testing.T) {
+			_, err := testTool(t, toolsdk.CreateWorkspace, tb, toolsdk.CreateWorkspaceArgs{
+				User:       "me",
+				Name:       testutil.GetRandomNameHyphenated(t),
+				TemplateID: "not-a-uuid",
+			})
+			require.ErrorContains(t, err, "template_id must be a valid UUID")
+		})
+
+		t.Run("RejectsInvalidTemplateVersionID", func(t *testing.T) {
+			_, err := testTool(t, toolsdk.CreateWorkspace, tb, toolsdk.CreateWorkspaceArgs{
+				User:              "me",
+				Name:              testutil.GetRandomNameHyphenated(t),
+				TemplateVersionID: "not-a-uuid",
+			})
+			require.ErrorContains(t, err, "template_version_id must be a valid UUID")
+		})
+
+		t.Run("RejectsInvalidTemplateVersionPresetID", func(t *testing.T) {
+			_, err := testTool(t, toolsdk.CreateWorkspace, tb, toolsdk.CreateWorkspaceArgs{
+				User:                    "me",
+				Name:                    testutil.GetRandomNameHyphenated(t),
+				TemplateVersionID:       uuid.NewString(),
+				TemplateVersionPresetID: "not-a-uuid",
+			})
+			require.ErrorContains(t, err, "template_version_preset_id must be a valid UUID")
+		})
 	})
 
 	t.Run("WorkspaceSSHExec", func(t *testing.T) {
@@ -459,6 +1074,24 @@ func TestTools(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 0, result.ExitCode)
 		require.Equal(t, "owner format works", result.Output)
+
+		// Regression test: agent-backed tools should also work when the
+		// workspace name is a valid dashless UUID.
+		const uuidLikeName = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6"
+		uuidClient, uuidWorkspace, uuidAgentToken := setupWorkspaceForAgentWithName(t, nil, uuidLikeName)
+		_ = agenttest.New(t, uuidClient.URL, uuidAgentToken)
+		coderdtest.NewWorkspaceAgentWaiter(t, uuidClient, uuidWorkspace.ID).Wait()
+
+		uuidTB, err := toolsdk.NewDeps(uuidClient)
+		require.NoError(t, err)
+
+		result, err = testTool(t, toolsdk.WorkspaceBash, uuidTB, toolsdk.WorkspaceBashArgs{
+			Workspace: uuidWorkspace.Name,
+			Command:   "echo 'uuid-like name works'",
+		})
+		require.NoError(t, err)
+		require.Equal(t, 0, result.ExitCode)
+		require.Equal(t, "uuid-like name works", result.Output)
 	})
 
 	t.Run("WorkspaceLS", func(t *testing.T) {
@@ -505,6 +1138,115 @@ func TestTools(t *testing.T) {
 				IsDir: false,
 			},
 		}, res.Contents)
+	})
+
+	t.Run("WorkspaceToolsUseInjectedAgentConnFunc", func(t *testing.T) {
+		t.Parallel()
+
+		client, workspace, agentToken := setupWorkspaceForAgent(t, nil)
+		_ = agenttest.New(t, client.URL, agentToken)
+		coderdtest.NewWorkspaceAgentWaiter(t, client, workspace.ID).Wait()
+
+		ws, err := client.Workspace(t.Context(), workspace.ID)
+		require.NoError(t, err)
+		require.NotEmpty(t, ws.LatestBuild.Resources)
+		require.NotEmpty(t, ws.LatestBuild.Resources[0].Agents)
+		agentID := ws.LatestBuild.Resources[0].Agents[0].ID
+		sentinelErr := xerrors.New("injected agent connection function used")
+
+		tests := []struct {
+			name string
+			run  func(t *testing.T, tb toolsdk.Deps) error
+		}{
+			{
+				name: "WorkspaceLS",
+				run: func(t *testing.T, tb toolsdk.Deps) error {
+					_, err := testTool(t, toolsdk.WorkspaceLS, tb, toolsdk.WorkspaceLSArgs{
+						Workspace: workspace.Name,
+						Path:      "/tmp",
+					})
+					return err
+				},
+			},
+			{
+				name: "WorkspaceReadFile",
+				run: func(t *testing.T, tb toolsdk.Deps) error {
+					_, err := testTool(t, toolsdk.WorkspaceReadFile, tb, toolsdk.WorkspaceReadFileArgs{
+						Workspace: workspace.Name,
+						Path:      "/tmp/file",
+					})
+					return err
+				},
+			},
+			{
+				name: "WorkspaceWriteFile",
+				run: func(t *testing.T, tb toolsdk.Deps) error {
+					_, err := testTool(t, toolsdk.WorkspaceWriteFile, tb, toolsdk.WorkspaceWriteFileArgs{
+						Workspace: workspace.Name,
+						Path:      "/tmp/file",
+						Content:   []byte("hello from agent connection function"),
+					})
+					return err
+				},
+			},
+			{
+				name: "WorkspaceEditFile",
+				run: func(t *testing.T, tb toolsdk.Deps) error {
+					_, err := testTool(t, toolsdk.WorkspaceEditFile, tb, toolsdk.WorkspaceEditFileArgs{
+						Workspace: workspace.Name,
+						Path:      "/tmp/file",
+						Edits: []workspacesdk.FileEdit{{
+							Search:  "hello",
+							Replace: "goodbye",
+						}},
+					})
+					return err
+				},
+			},
+			{
+				name: "WorkspaceEditFiles",
+				run: func(t *testing.T, tb toolsdk.Deps) error {
+					_, err := testTool(t, toolsdk.WorkspaceEditFiles, tb, toolsdk.WorkspaceEditFilesArgs{
+						Workspace: workspace.Name,
+						Files: []workspacesdk.FileEdits{{
+							Path: "/tmp/file",
+							Edits: []workspacesdk.FileEdit{{
+								Search:  "hello",
+								Replace: "goodbye",
+							}},
+						}},
+					})
+					return err
+				},
+			},
+			{
+				name: "WorkspaceBash",
+				run: func(t *testing.T, tb toolsdk.Deps) error {
+					_, err := testTool(t, toolsdk.WorkspaceBash, tb, toolsdk.WorkspaceBashArgs{
+						Workspace: workspace.Name,
+						Command:   "echo hello",
+					})
+					return err
+				},
+			},
+		}
+
+		for _, tt := range tests {
+			tt := tt
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				agentConnFn := &recordingAgentConnFunc{err: sentinelErr}
+				tb, err := toolsdk.NewDeps(client, toolsdk.WithAgentConnFunc(agentConnFn.AgentConn))
+				require.NoError(t, err)
+
+				err = tt.run(t, tb)
+				require.ErrorIs(t, err, sentinelErr)
+				require.ErrorContains(t, err, "failed to dial agent")
+				require.Equal(t, 1, agentConnFn.calls)
+				require.Equal(t, agentID, agentConnFn.agentID)
+			})
+		}
 	})
 
 	t.Run("WorkspaceReadFile", func(t *testing.T) {
@@ -851,16 +1593,15 @@ func TestTools(t *testing.T) {
 					TemplateVersionID: r.TemplateVersion.ID.String(),
 					Input:             "do yet another barrel roll",
 				},
-				error: "Template does not have required parameter \"AI Prompt\"",
+				error: "Template does not have a valid \"coder_ai_task\" resource.",
 			},
 			{
 				name: "WithPreset",
 				args: toolsdk.CreateTaskArgs{
-					TemplateVersionID:       r.TemplateVersion.ID.String(),
+					TemplateVersionID:       aiTV.TemplateVersion.ID.String(),
 					TemplateVersionPresetID: presetID.String(),
 					Input:                   "not enough barrel rolls",
 				},
-				error: "Template does not have required parameter \"AI Prompt\"",
 			},
 		}
 
@@ -895,37 +1636,27 @@ func TestTools(t *testing.T) {
 			},
 		}).Do()
 
-		ws1Table := dbgen.Workspace(t, store, database.WorkspaceTable{
+		build1 := dbfake.WorkspaceBuild(t, store, database.WorkspaceTable{
 			Name:           "delete-task-workspace-1",
 			OrganizationID: owner.OrganizationID,
 			OwnerID:        member.ID,
 			TemplateID:     aiTV.Template.ID,
-		})
-		task1 := dbgen.Task(t, store, database.TaskTable{
-			OrganizationID:    owner.OrganizationID,
-			OwnerID:           member.ID,
-			Name:              ws1Table.Name,
-			WorkspaceID:       uuid.NullUUID{UUID: ws1Table.ID, Valid: true},
-			TemplateVersionID: aiTV.TemplateVersion.ID,
-			Prompt:            "delete task 1",
-		})
-		_ = dbfake.WorkspaceBuild(t, store, ws1Table).WithTask(nil).Do()
+		}).WithTask(database.TaskTable{
+			Name:   "delete-task-1",
+			Prompt: "delete task 1",
+		}, nil).Do()
+		task1 := build1.Task
 
-		ws2Table := dbgen.Workspace(t, store, database.WorkspaceTable{
+		build2 := dbfake.WorkspaceBuild(t, store, database.WorkspaceTable{
 			Name:           "delete-task-workspace-2",
 			OrganizationID: owner.OrganizationID,
 			OwnerID:        member.ID,
 			TemplateID:     aiTV.Template.ID,
-		})
-		task2 := dbgen.Task(t, store, database.TaskTable{
-			OrganizationID:    owner.OrganizationID,
-			OwnerID:           member.ID,
-			Name:              ws2Table.Name,
-			WorkspaceID:       uuid.NullUUID{UUID: ws2Table.ID, Valid: true},
-			TemplateVersionID: aiTV.TemplateVersion.ID,
-			Prompt:            "delete task 2",
-		})
-		_ = dbfake.WorkspaceBuild(t, store, ws2Table).WithTask(nil).Do()
+		}).WithTask(database.TaskTable{
+			Name:   "delete-task-2",
+			Prompt: "delete task 2",
+		}, nil).Do()
+		task2 := build2.Task
 
 		tests := []struct {
 			name  string
@@ -1003,9 +1734,8 @@ func TestTools(t *testing.T) {
 		version := coderdtest.CreateTemplateVersion(t, client, owner.OrganizationID, &echo.Responses{
 			Parse:          echo.ParseComplete,
 			ProvisionApply: echo.ApplyComplete,
-			ProvisionPlan: []*proto.Response{
-				{Type: &proto.Response_Plan{Plan: &proto.PlanComplete{
-					Parameters: []*proto.RichParameter{{Name: "AI Prompt", Type: "string"}},
+			ProvisionGraph: []*proto.Response{
+				{Type: &proto.Response_Graph{Graph: &proto.GraphComplete{
 					HasAiTasks: true,
 				}}},
 			},
@@ -1013,11 +1743,8 @@ func TestTools(t *testing.T) {
 		coderdtest.AwaitTemplateVersionJobCompleted(t, client, version.ID)
 		template := coderdtest.CreateTemplate(t, client, owner.OrganizationID, version.ID)
 
-		expClient := codersdk.NewExperimentalClient(client)
-		taskExpClient := codersdk.NewExperimentalClient(taskClient)
-
 		// This task should not show up since listing is user-scoped.
-		_, err := expClient.CreateTask(ctx, member.Username, codersdk.CreateTaskRequest{
+		_, err := client.CreateTask(ctx, member.Username, codersdk.CreateTaskRequest{
 			TemplateVersionID: template.ActiveVersionID,
 			Input:             "task for member",
 			Name:              "list-task-workspace-member",
@@ -1027,7 +1754,7 @@ func TestTools(t *testing.T) {
 		// Create tasks for taskUser. These should show up in the list.
 		for i := range 5 {
 			taskName := fmt.Sprintf("list-task-workspace-%d", i)
-			task, err := taskExpClient.CreateTask(ctx, codersdk.Me, codersdk.CreateTaskRequest{
+			task, err := taskClient.CreateTask(ctx, codersdk.Me, codersdk.CreateTaskRequest{
 				TemplateVersionID: template.ActiveVersionID,
 				Input:             fmt.Sprintf("task %d", i),
 				Name:              taskName,
@@ -1113,21 +1840,16 @@ func TestTools(t *testing.T) {
 			},
 		}).Do()
 
-		ws1Table := dbgen.Workspace(t, store, database.WorkspaceTable{
+		build := dbfake.WorkspaceBuild(t, store, database.WorkspaceTable{
 			Name:           "get-task-workspace-1",
 			OrganizationID: owner.OrganizationID,
 			OwnerID:        member.ID,
 			TemplateID:     aiTV.Template.ID,
-		})
-		task := dbgen.Task(t, store, database.TaskTable{
-			OrganizationID:    owner.OrganizationID,
-			OwnerID:           member.ID,
-			Name:              "get-task-1",
-			WorkspaceID:       uuid.NullUUID{UUID: ws1Table.ID, Valid: true},
-			TemplateVersionID: aiTV.TemplateVersion.ID,
-			Prompt:            "get task",
-		})
-		_ = dbfake.WorkspaceBuild(t, store, ws1Table).WithTask(nil).Do()
+		}).WithTask(database.TaskTable{
+			Name:   "get-task-1",
+			Prompt: "get task",
+		}, nil).Do()
+		task := build.Task
 
 		tests := []struct {
 			name     string
@@ -1376,24 +2098,29 @@ func TestTools(t *testing.T) {
 			},
 		}).Do()
 
-		wsTable := dbgen.Workspace(t, store, database.WorkspaceTable{
+		ws := dbfake.WorkspaceBuild(t, store, database.WorkspaceTable{
 			Name:           "send-task-input-ws",
 			OrganizationID: owner.OrganizationID,
 			OwnerID:        member.ID,
 			TemplateID:     aiTV.Template.ID,
-		})
-		task := dbgen.Task(t, store, database.TaskTable{
-			OrganizationID:    owner.OrganizationID,
-			OwnerID:           member.ID,
-			Name:              "send-task-input",
-			WorkspaceID:       uuid.NullUUID{UUID: wsTable.ID, Valid: true},
-			TemplateVersionID: aiTV.TemplateVersion.ID,
-			Prompt:            "send task input",
-		})
-		ws := dbfake.WorkspaceBuild(t, store, wsTable).WithTask(&proto.App{Url: srv.URL}).Do()
+		}).WithTask(database.TaskTable{
+			Name:   "send-task-input",
+			Prompt: "send task input",
+		}, &proto.App{Url: srv.URL}).Do()
+		task := ws.Task
 
 		_ = agenttest.New(t, client.URL, ws.AgentToken)
-		coderdtest.NewWorkspaceAgentWaiter(t, client, ws.Workspace.ID).Wait()
+		coderdtest.NewWorkspaceAgentWaiter(t, client, ws.Workspace.ID).
+			WaitFor(coderdtest.AgentsReady)
+
+		ctx := testutil.Context(t, testutil.WaitShort)
+
+		// Ensure the app is healthy (required to send task input).
+		err = store.UpdateWorkspaceAppHealthByID(dbauthz.AsSystemRestricted(ctx), database.UpdateWorkspaceAppHealthByIDParams{
+			ID:     task.WorkspaceAppID.UUID,
+			Health: database.WorkspaceAppHealthHealthy,
+		})
+		require.NoError(t, err)
 
 		tests := []struct {
 			name  string
@@ -1454,8 +2181,6 @@ func TestTools(t *testing.T) {
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				t.Parallel()
-
 				tb, err := toolsdk.NewDeps(memberClient)
 				require.NoError(t, err)
 
@@ -1513,24 +2238,29 @@ func TestTools(t *testing.T) {
 			},
 		}).Do()
 
-		wsTable := dbgen.Workspace(t, store, database.WorkspaceTable{
+		ws := dbfake.WorkspaceBuild(t, store, database.WorkspaceTable{
 			Name:           "get-task-logs-ws",
 			OrganizationID: owner.OrganizationID,
 			OwnerID:        member.ID,
 			TemplateID:     aiTV.Template.ID,
-		})
-		task := dbgen.Task(t, store, database.TaskTable{
-			OrganizationID:    owner.OrganizationID,
-			OwnerID:           member.ID,
-			Name:              "get-task-logs",
-			WorkspaceID:       uuid.NullUUID{UUID: wsTable.ID, Valid: true},
-			TemplateVersionID: aiTV.TemplateVersion.ID,
-			Prompt:            "get task logs",
-		})
-		ws := dbfake.WorkspaceBuild(t, store, wsTable).WithTask(&proto.App{Url: srv.URL}).Do()
+		}).WithTask(database.TaskTable{
+			Name:   "get-task-logs",
+			Prompt: "get task logs",
+		}, &proto.App{Url: srv.URL}).Do()
+		task := ws.Task
 
 		_ = agenttest.New(t, client.URL, ws.AgentToken)
-		coderdtest.NewWorkspaceAgentWaiter(t, client, ws.Workspace.ID).Wait()
+		coderdtest.NewWorkspaceAgentWaiter(t, client, ws.Workspace.ID).
+			WaitFor(coderdtest.AgentsReady)
+
+		ctx := testutil.Context(t, testutil.WaitShort)
+
+		// Ensure the app is healthy (required to read task logs).
+		err = store.UpdateWorkspaceAppHealthByID(dbauthz.AsSystemRestricted(ctx), database.UpdateWorkspaceAppHealthByIDParams{
+			ID:     task.WorkspaceAppID.UUID,
+			Health: database.WorkspaceAppHealthHealthy,
+		})
+		require.NoError(t, err)
 
 		tests := []struct {
 			name     string
@@ -1582,8 +2312,6 @@ func TestTools(t *testing.T) {
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				t.Parallel()
-
 				tb, err := toolsdk.NewDeps(memberClient)
 				require.NoError(t, err)
 

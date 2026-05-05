@@ -1,44 +1,45 @@
-import { API } from "api/api";
-import { getErrorDetail, getErrorMessage } from "api/errors";
-import { templateVersionPresets } from "api/queries/templates";
+import { ArrowUpIcon, InfoIcon, RedoIcon, RotateCcwIcon } from "lucide-react";
+import { type FC, useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "react-query";
+import { useNavigate } from "react-router";
+import TextareaAutosize, {
+	type TextareaAutosizeProps,
+} from "react-textarea-autosize";
+import { toast } from "sonner";
+import { API } from "#/api/api";
+import { getErrorDetail, getErrorMessage } from "#/api/errors";
+import { templateVersionPresets } from "#/api/queries/templates";
 import type {
 	Preset,
 	Task,
 	Template,
 	TemplateVersionExternalAuth,
-} from "api/typesGenerated";
-import { ErrorAlert } from "components/Alert/ErrorAlert";
-import { Button } from "components/Button/Button";
-import { ExternalImage } from "components/ExternalImage/ExternalImage";
-import { displayError, displaySuccess } from "components/GlobalSnackbar/utils";
-import { Link } from "components/Link/Link";
+} from "#/api/typesGenerated";
+import { ErrorAlert } from "#/components/Alert/ErrorAlert";
+import { Badge } from "#/components/Badge/Badge";
+import { Button } from "#/components/Button/Button";
+import { ExternalImage } from "#/components/ExternalImage/ExternalImage";
+import { Kbd, KbdGroup } from "#/components/Kbd/Kbd";
+import { Link } from "#/components/Link/Link";
 import {
 	Select,
 	SelectContent,
 	SelectItem,
 	SelectValue,
-} from "components/Select/Select";
-import { Skeleton } from "components/Skeleton/Skeleton";
-import { Spinner } from "components/Spinner/Spinner";
+} from "#/components/Select/Select";
+import { Skeleton } from "#/components/Skeleton/Skeleton";
+import { Spinner } from "#/components/Spinner/Spinner";
 import {
 	Tooltip,
 	TooltipContent,
-	TooltipProvider,
 	TooltipTrigger,
-} from "components/Tooltip/Tooltip";
-import { useAuthenticated } from "hooks/useAuthenticated";
-import { useExternalAuth } from "hooks/useExternalAuth";
-import { ArrowUpIcon, RedoIcon, RotateCcwIcon } from "lucide-react";
-import { type FC, useEffect, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "react-query";
-import TextareaAutosize, {
-	type TextareaAutosizeProps,
-} from "react-textarea-autosize";
-import { docs } from "utils/docs";
+} from "#/components/Tooltip/Tooltip";
+import { useAuthenticated } from "#/hooks/useAuthenticated";
+import { useExternalAuth } from "#/hooks/useExternalAuth";
+import { docs } from "#/utils/docs";
+import { getOSKey } from "#/utils/platform";
 import { PromptSelectTrigger } from "./PromptSelectTrigger";
 import { TemplateVersionSelect } from "./TemplateVersionSelect";
-
-const AI_PROMPT_PARAMETER_NAME = "AI Prompt";
 
 type TaskPromptProps = {
 	templates: Template[] | undefined;
@@ -51,6 +52,8 @@ export const TaskPrompt: FC<TaskPromptProps> = ({
 	error,
 	onRetry,
 }) => {
+	const navigate = useNavigate();
+
 	if (error) {
 		return <TaskPromptLoadingError error={error} onRetry={onRetry} />;
 	}
@@ -63,8 +66,14 @@ export const TaskPrompt: FC<TaskPromptProps> = ({
 	return (
 		<CreateTaskForm
 			templates={templates}
-			onSuccess={() => {
-				displaySuccess("Task created successfully");
+			onSuccess={(task) => {
+				toast.success(`Task "${task.name}" created successfully.`, {
+					description: `"${task.initial_prompt}"`,
+					action: {
+						label: "View task",
+						onClick: () => navigate(`/tasks/${task.owner_name}/${task.id}`),
+					},
+				});
 			}}
 		/>
 	);
@@ -164,19 +173,6 @@ const CreateTaskForm: FC<CreateTaskFormProps> = ({ templates, onSuccess }) => {
 		const defaultPreset = presets?.find((p) => p.Default);
 		setSelectedPresetId(defaultPreset?.ID ?? presets?.[0]?.ID);
 	}, [presets]);
-	const selectedPreset = presets?.find((p) => p.ID === selectedPresetId);
-
-	// Read-only prompt if defined in preset
-	const presetPrompt = selectedPreset?.Parameters?.find(
-		(param) => param.Name === AI_PROMPT_PARAMETER_NAME,
-	)?.Value;
-	const isPromptReadOnly = !!presetPrompt;
-	useEffect(() => {
-		if (presetPrompt) {
-			setPrompt(presetPrompt);
-		}
-	}, [presetPrompt]);
-
 	// External Auth
 	const {
 		externalAuth,
@@ -195,7 +191,7 @@ const CreateTaskForm: FC<CreateTaskFormProps> = ({ templates, onSuccess }) => {
 		mutationFn: async ({ prompt }: CreateTaskMutationFnProps) => {
 			// Users with updateTemplates permission can select the version to use.
 			if (permissions.updateTemplates) {
-				return API.experimental.createTask(user.id, {
+				return API.createTask(user.id, {
 					input: prompt,
 					template_version_id: selectedVersionId,
 					template_version_preset_id: selectedPresetId,
@@ -218,7 +214,7 @@ const CreateTaskForm: FC<CreateTaskFormProps> = ({ templates, onSuccess }) => {
 		},
 	});
 
-	const onSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+	const onSubmit = async (e: React.SyntheticEvent) => {
 		e.preventDefault();
 
 		try {
@@ -229,7 +225,14 @@ const CreateTaskForm: FC<CreateTaskFormProps> = ({ templates, onSuccess }) => {
 		} catch (error) {
 			const message = getErrorMessage(error, "Error creating task");
 			const detail = getErrorDetail(error) ?? "Please try again";
-			displayError(message, detail);
+			toast.error(message, { description: detail });
+		}
+	};
+
+	const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+		// Submit form on Cmd+Enter (Mac) or Ctrl+Enter (Windows/Linux)
+		if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+			onSubmit(e);
 		}
 	};
 
@@ -242,35 +245,33 @@ const CreateTaskForm: FC<CreateTaskFormProps> = ({ templates, onSuccess }) => {
 			{externalAuthError && <ErrorAlert error={externalAuthError} />}
 
 			<fieldset
-				className="border border-border border-solid rounded-3xl p-3 bg-surface-secondary"
+				className="border border-border border-solid rounded-3xl p-3 bg-surface-secondary min-w-0"
 				disabled={createTaskMutation.isPending}
 			>
-				<label
-					htmlFor="prompt"
-					className={
-						isPromptReadOnly
-							? "text-xs font-medium text-content-primary block px-3 pt-2"
-							: "sr-only"
-					}
-				>
-					{isPromptReadOnly ? "Prompt defined by preset" : "Prompt"}
+				<label htmlFor="prompt" className="sr-only">
+					Prompt
 				</label>
 				<PromptTextarea
 					required
 					value={prompt}
 					onChange={(e) => setPrompt(e.target.value)}
-					readOnly={isPromptReadOnly}
 					isSubmitting={createTaskMutation.isPending}
+					onKeyDown={handleKeyDown}
 				/>
-				<div className="flex items-center justify-between pt-2">
-					<div className="flex items-center gap-1">
-						<div>
+				<div className="flex items-center justify-between pt-2 gap-2">
+					<div className="flex items-center gap-1 flex-1 min-w-0">
+						<div className="min-w-0 max-w-[33.3%]">
 							<label htmlFor="templateID" className="sr-only">
 								Select template
 							</label>
 							<Select
 								name="templateID"
-								onValueChange={(value) => setSelectedTemplateId(value)}
+								onValueChange={(value) => {
+									setSelectedTemplateId(value);
+									if (value !== selectedTemplateId) {
+										setSelectedPresetId(undefined);
+									}
+								}}
 								defaultValue={templates[0].id}
 								required
 							>
@@ -281,9 +282,18 @@ const CreateTaskForm: FC<CreateTaskFormProps> = ({ templates, onSuccess }) => {
 									{templates.map((template) => {
 										return (
 											<SelectItem value={template.id} key={template.id}>
-												<span className="overflow-hidden text-ellipsis block">
-													{template.display_name || template.name}
-												</span>
+												<div className="flex items-center gap-2">
+													{template.icon && (
+														<ExternalImage
+															src={template.icon}
+															alt={template.name}
+															className="size-icon-sm flex-shrink-0"
+														/>
+													)}
+													<span className="overflow-hidden text-ellipsis block">
+														{template.display_name || template.name}
+													</span>
+												</div>
 											</SelectItem>
 										);
 									})}
@@ -292,7 +302,7 @@ const CreateTaskForm: FC<CreateTaskFormProps> = ({ templates, onSuccess }) => {
 						</div>
 
 						{permissions.updateTemplates && (
-							<div>
+							<div className="min-w-0 max-w-[33.3%]">
 								<label htmlFor="versionId" className="sr-only">
 									Template version
 								</label>
@@ -305,7 +315,7 @@ const CreateTaskForm: FC<CreateTaskFormProps> = ({ templates, onSuccess }) => {
 							</div>
 						)}
 
-						<div>
+						<div className="flex-1 min-w-0">
 							<label htmlFor="presetID" className="sr-only">
 								Preset
 							</label>
@@ -321,15 +331,50 @@ const CreateTaskForm: FC<CreateTaskFormProps> = ({ templates, onSuccess }) => {
 										value={selectedPresetId}
 										onValueChange={setSelectedPresetId}
 									>
-										<PromptSelectTrigger id="presetID" tooltip="Preset">
+										<PromptSelectTrigger
+											id="presetID"
+											tooltip="Preset"
+											className="max-w-full [&_[data-slot=preset-name]]:truncate [&_[data-slot=preset-name]]:min-w-0 [&_[data-slot=preset-description]]:hidden"
+										>
 											<SelectValue placeholder="Select a preset" />
 										</PromptSelectTrigger>
 										<SelectContent>
 											{presets?.toSorted(sortByDefault).map((preset) => (
 												<SelectItem value={preset.ID} key={preset.ID}>
-													<span className="overflow-hidden text-ellipsis block">
-														{preset.Name} {preset.Default && "(Default)"}
-													</span>
+													<div className="flex items-center gap-2">
+														{preset.Icon && (
+															<ExternalImage
+																data-slot="preset-icon"
+																src={preset.Icon}
+																alt={preset.Name}
+																className="size-icon-sm shrink-0"
+															/>
+														)}
+														<span
+															data-slot="preset-name"
+															className="truncate min-w-0"
+														>
+															{preset.Name}
+														</span>
+														{preset.Default && (
+															<Badge size="xs" className="shrink-0">
+																Default
+															</Badge>
+														)}
+														{preset.Description && (
+															<Tooltip>
+																<TooltipTrigger asChild>
+																	<InfoIcon
+																		className="size-4"
+																		data-slot="preset-description"
+																	/>
+																</TooltipTrigger>
+																<TooltipContent>
+																	{preset.Description}
+																</TooltipContent>
+															</Tooltip>
+														)}
+													</div>
 												</SelectItem>
 											))}
 										</SelectContent>
@@ -347,23 +392,34 @@ const CreateTaskForm: FC<CreateTaskFormProps> = ({ templates, onSuccess }) => {
 							/>
 						)}
 
-						<Button
-							size="icon"
-							type="submit"
-							disabled={prompt.trim().length === 0 || isMissingExternalAuth}
-							className="rounded-full disabled:bg-surface-invert-primary disabled:opacity-70"
-						>
-							<Spinner
-								loading={
-									isLoadingExternalAuth ||
-									isPollingExternalAuth ||
-									createTaskMutation.isPending
-								}
-							>
-								<ArrowUpIcon />
-							</Spinner>
-							<span className="sr-only">Run task</span>
-						</Button>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Button
+									size="icon"
+									type="submit"
+									disabled={prompt.trim().length === 0 || isMissingExternalAuth}
+									className="rounded-full disabled:bg-surface-invert-primary disabled:opacity-70"
+								>
+									<Spinner
+										loading={
+											isLoadingExternalAuth ||
+											isPollingExternalAuth ||
+											createTaskMutation.isPending
+										}
+									>
+										<ArrowUpIcon />
+									</Spinner>
+									<span className="sr-only">Run task</span>
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent align="end">
+								<KbdGroup>
+									<Kbd>{getOSKey()}</Kbd>
+									<span>+</span>
+									<Kbd>Enter</Kbd>
+								</KbdGroup>
+							</TooltipContent>
+						</Tooltip>
 					</div>
 				</div>
 			</fieldset>
@@ -391,7 +447,7 @@ const ExternalAuthButtons: FC<ExternalAuthButtonProps> = ({
 		return (
 			<div className="flex items-center gap-2" key={auth.id}>
 				<Button
-					className="bg-surface-tertiary hover:bg-surface-quaternary rounded-full text-white"
+					className="bg-surface-tertiary hover:bg-surface-quaternary rounded-full text-content-primary"
 					size="sm"
 					disabled={isPollingExternalAuth || auth.authenticated}
 					onClick={() => {
@@ -410,23 +466,21 @@ const ExternalAuthButtons: FC<ExternalAuthButtonProps> = ({
 				</Button>
 
 				{shouldRetry && !auth.authenticated && (
-					<TooltipProvider>
-						<Tooltip delayDuration={100}>
-							<TooltipTrigger asChild>
-								<Button
-									variant="outline"
-									size="icon"
-									onClick={startPollingExternalAuth}
-								>
-									<RedoIcon />
-									<span className="sr-only">Refresh external auth</span>
-								</Button>
-							</TooltipTrigger>
-							<TooltipContent>
-								Retry connecting to {auth.display_name}
-							</TooltipContent>
-						</Tooltip>
-					</TooltipProvider>
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								variant="outline"
+								size="icon"
+								onClick={startPollingExternalAuth}
+							>
+								<RedoIcon />
+								<span className="sr-only">Refresh external auth</span>
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent>
+							Retry connecting to {auth.display_name}
+						</TooltipContent>
+					</Tooltip>
 				)}
 			</div>
 		);
@@ -452,7 +506,7 @@ async function createTaskWithLatestTemplateVersion(
 	presetId: string | undefined,
 ): Promise<Task> {
 	const template = await API.getTemplate(templateId);
-	return API.experimental.createTask(userId, {
+	return API.createTask(userId, {
 		input,
 		template_version_id: template.active_version_id,
 		template_version_preset_id: presetId,

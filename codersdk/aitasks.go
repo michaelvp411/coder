@@ -10,68 +10,20 @@ import (
 
 	"github.com/google/uuid"
 	"golang.org/x/xerrors"
-
-	"github.com/coder/terraform-provider-coder/v2/provider"
 )
 
-// AITaskPromptParameterName is the name of the parameter used to pass prompts
-// to AI tasks.
-//
-// Experimental: This value is experimental and may change in the future.
-const AITaskPromptParameterName = provider.TaskPromptParameterName
-
-// AITasksPromptsResponse represents the response from the AITaskPrompts method.
-//
-// Experimental: This method is experimental and may change in the future.
-type AITasksPromptsResponse struct {
-	// Prompts is a map of workspace build IDs to prompts.
-	Prompts map[string]string `json:"prompts"`
-}
-
-// AITaskPrompts returns prompts for multiple workspace builds by their IDs.
-//
-// Experimental: This method is experimental and may change in the future.
-func (c *ExperimentalClient) AITaskPrompts(ctx context.Context, buildIDs []uuid.UUID) (AITasksPromptsResponse, error) {
-	if len(buildIDs) == 0 {
-		return AITasksPromptsResponse{
-			Prompts: make(map[string]string),
-		}, nil
-	}
-
-	// Convert UUIDs to strings and join them
-	buildIDStrings := make([]string, len(buildIDs))
-	for i, id := range buildIDs {
-		buildIDStrings[i] = id.String()
-	}
-	buildIDsParam := strings.Join(buildIDStrings, ",")
-
-	res, err := c.Request(ctx, http.MethodGet, "/api/experimental/aitasks/prompts", nil, WithQueryParam("build_ids", buildIDsParam))
-	if err != nil {
-		return AITasksPromptsResponse{}, err
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		return AITasksPromptsResponse{}, ReadBodyAsError(res)
-	}
-	var prompts AITasksPromptsResponse
-	return prompts, json.NewDecoder(res.Body).Decode(&prompts)
-}
-
 // CreateTaskRequest represents the request to create a new task.
-//
-// Experimental: This type is experimental and may change in the future.
 type CreateTaskRequest struct {
 	TemplateVersionID       uuid.UUID `json:"template_version_id" format:"uuid"`
 	TemplateVersionPresetID uuid.UUID `json:"template_version_preset_id,omitempty" format:"uuid"`
 	Input                   string    `json:"input"`
 	Name                    string    `json:"name,omitempty"`
+	DisplayName             string    `json:"display_name,omitempty"`
 }
 
 // CreateTask creates a new task.
-//
-// Experimental: This method is experimental and may change in the future.
-func (c *ExperimentalClient) CreateTask(ctx context.Context, user string, request CreateTaskRequest) (Task, error) {
-	res, err := c.Request(ctx, http.MethodPost, fmt.Sprintf("/api/experimental/tasks/%s", user), request)
+func (c *Client) CreateTask(ctx context.Context, user string, request CreateTaskRequest) (Task, error) {
+	res, err := c.Request(ctx, http.MethodPost, fmt.Sprintf("/api/v2/tasks/%s", user), request)
 	if err != nil {
 		return Task{}, err
 	}
@@ -90,8 +42,6 @@ func (c *ExperimentalClient) CreateTask(ctx context.Context, user string, reques
 }
 
 // TaskStatus represents the status of a task.
-//
-// Experimental: This type is experimental and may change in the future.
 type TaskStatus string
 
 const (
@@ -128,8 +78,6 @@ func AllTaskStatuses() []TaskStatus {
 }
 
 // TaskState represents the high-level lifecycle of a task.
-//
-// Experimental: This type is experimental and may change in the future.
 type TaskState string
 
 // TaskState enums.
@@ -149,8 +97,6 @@ const (
 )
 
 // Task represents a task.
-//
-// Experimental: This type is experimental and may change in the future.
 type Task struct {
 	ID                      uuid.UUID                `json:"id" format:"uuid" table:"id"`
 	OrganizationID          uuid.UUID                `json:"organization_id" format:"uuid" table:"organization id"`
@@ -158,6 +104,7 @@ type Task struct {
 	OwnerName               string                   `json:"owner_name" table:"owner name"`
 	OwnerAvatarURL          string                   `json:"owner_avatar_url,omitempty" table:"owner avatar url"`
 	Name                    string                   `json:"name" table:"name,default_sort"`
+	DisplayName             string                   `json:"display_name" table:"display_name"`
 	TemplateID              uuid.UUID                `json:"template_id" format:"uuid" table:"template id"`
 	TemplateVersionID       uuid.UUID                `json:"template_version_id" format:"uuid" table:"template version id"`
 	TemplateName            string                   `json:"template_name" table:"template name"`
@@ -179,8 +126,6 @@ type Task struct {
 }
 
 // TaskStateEntry represents a single entry in the task's state history.
-//
-// Experimental: This type is experimental and may change in the future.
 type TaskStateEntry struct {
 	Timestamp time.Time `json:"timestamp" format:"date-time" table:"-"`
 	State     TaskState `json:"state" enum:"working,idle,completed,failed" table:"state"`
@@ -189,8 +134,6 @@ type TaskStateEntry struct {
 }
 
 // TasksFilter filters the list of tasks.
-//
-// Experimental: This type is experimental and may change in the future.
 type TasksFilter struct {
 	// Owner can be a username, UUID, or "me".
 	Owner string `json:"owner,omitempty"`
@@ -203,8 +146,6 @@ type TasksFilter struct {
 }
 
 // TaskListResponse is the response shape for tasks list.
-//
-// Experimental response shape for tasks list (server returns []Task).
 type TasksListResponse struct {
 	Tasks []Task `json:"tasks"`
 	Count int    `json:"count"`
@@ -236,14 +177,12 @@ func (f TasksFilter) asRequestOption() RequestOption {
 }
 
 // Tasks lists all tasks belonging to the user or specified owner.
-//
-// Experimental: This method is experimental and may change in the future.
-func (c *ExperimentalClient) Tasks(ctx context.Context, filter *TasksFilter) ([]Task, error) {
+func (c *Client) Tasks(ctx context.Context, filter *TasksFilter) ([]Task, error) {
 	if filter == nil {
 		filter = &TasksFilter{}
 	}
 
-	res, err := c.Request(ctx, http.MethodGet, "/api/experimental/tasks", nil, filter.asRequestOption())
+	res, err := c.Request(ctx, http.MethodGet, "/api/v2/tasks", nil, filter.asRequestOption())
 	if err != nil {
 		return nil, err
 	}
@@ -260,11 +199,32 @@ func (c *ExperimentalClient) Tasks(ctx context.Context, filter *TasksFilter) ([]
 	return tres.Tasks, nil
 }
 
-// TaskByID fetches a single experimental task by its ID.
-//
-// Experimental: This method is experimental and may change in the future.
-func (c *ExperimentalClient) TaskByID(ctx context.Context, id uuid.UUID) (Task, error) {
-	res, err := c.Request(ctx, http.MethodGet, fmt.Sprintf("/api/experimental/tasks/%s/%s", "me", id.String()), nil)
+// TaskByID fetches a single task by its ID.
+// Only tasks owned by codersdk.Me are supported.
+func (c *Client) TaskByID(ctx context.Context, id uuid.UUID) (Task, error) {
+	res, err := c.Request(ctx, http.MethodGet, fmt.Sprintf("/api/v2/tasks/%s/%s", "me", id.String()), nil)
+	if err != nil {
+		return Task{}, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return Task{}, ReadBodyAsError(res)
+	}
+
+	var task Task
+	if err := json.NewDecoder(res.Body).Decode(&task); err != nil {
+		return Task{}, err
+	}
+
+	return task, nil
+}
+
+// TaskByOwnerAndName fetches a single task by its owner and name.
+func (c *Client) TaskByOwnerAndName(ctx context.Context, owner, ident string) (Task, error) {
+	if owner == "" {
+		owner = Me
+	}
+	res, err := c.Request(ctx, http.MethodGet, fmt.Sprintf("/api/v2/tasks/%s/%s", owner, ident), nil)
 	if err != nil {
 		return Task{}, err
 	}
@@ -303,7 +263,7 @@ func splitTaskIdentifier(identifier string) (owner string, taskName string, err 
 //
 // Since there is no TaskByOwnerAndName endpoint yet, this function uses the
 // list endpoint with filtering when a name is provided.
-func (c *ExperimentalClient) TaskByIdentifier(ctx context.Context, identifier string) (Task, error) {
+func (c *Client) TaskByIdentifier(ctx context.Context, identifier string) (Task, error) {
 	identifier = strings.TrimSpace(identifier)
 
 	// Try parsing as UUID first.
@@ -317,41 +277,12 @@ func (c *ExperimentalClient) TaskByIdentifier(ctx context.Context, identifier st
 		return Task{}, err
 	}
 
-	tasks, err := c.Tasks(ctx, &TasksFilter{
-		Owner: owner,
-	})
-	if err != nil {
-		return Task{}, xerrors.Errorf("list tasks for owner %q: %w", owner, err)
-	}
-
-	if taskID, err := uuid.Parse(taskName); err == nil {
-		// Find task by ID.
-		for _, task := range tasks {
-			if task.ID == taskID {
-				return task, nil
-			}
-		}
-	} else {
-		// Find task by name.
-		for _, task := range tasks {
-			if task.Name == taskName {
-				return task, nil
-			}
-		}
-	}
-
-	// Mimic resource not found from API.
-	var notFoundErr error = &Error{
-		Response: Response{Message: "Resource not found or you do not have access to this resource"},
-	}
-	return Task{}, xerrors.Errorf("task %q not found for owner %q: %w", taskName, owner, notFoundErr)
+	return c.TaskByOwnerAndName(ctx, owner, taskName)
 }
 
 // DeleteTask deletes a task by its ID.
-//
-// Experimental: This method is experimental and may change in the future.
-func (c *ExperimentalClient) DeleteTask(ctx context.Context, user string, id uuid.UUID) error {
-	res, err := c.Request(ctx, http.MethodDelete, fmt.Sprintf("/api/experimental/tasks/%s/%s", user, id.String()), nil)
+func (c *Client) DeleteTask(ctx context.Context, user string, id uuid.UUID) error {
+	res, err := c.Request(ctx, http.MethodDelete, fmt.Sprintf("/api/v2/tasks/%s/%s", user, id.String()), nil)
 	if err != nil {
 		return err
 	}
@@ -363,17 +294,13 @@ func (c *ExperimentalClient) DeleteTask(ctx context.Context, user string, id uui
 }
 
 // TaskSendRequest is used to send task input to the tasks sidebar app.
-//
-// Experimental: This type is experimental and may change in the future.
 type TaskSendRequest struct {
 	Input string `json:"input"`
 }
 
 // TaskSend submits task input to the tasks sidebar app.
-//
-// Experimental: This method is experimental and may change in the future.
-func (c *ExperimentalClient) TaskSend(ctx context.Context, user string, id uuid.UUID, req TaskSendRequest) error {
-	res, err := c.Request(ctx, http.MethodPost, fmt.Sprintf("/api/experimental/tasks/%s/%s/send", user, id.String()), req)
+func (c *Client) TaskSend(ctx context.Context, user string, id uuid.UUID, req TaskSendRequest) error {
+	res, err := c.Request(ctx, http.MethodPost, fmt.Sprintf("/api/v2/tasks/%s/%s/send", user, id.String()), req)
 	if err != nil {
 		return err
 	}
@@ -384,9 +311,72 @@ func (c *ExperimentalClient) TaskSend(ctx context.Context, user string, id uuid.
 	return nil
 }
 
+// UpdateTaskInputRequest is used to update a task's input.
+type UpdateTaskInputRequest struct {
+	Input string `json:"input"`
+}
+
+// UpdateTaskInput updates the task's input.
+func (c *Client) UpdateTaskInput(ctx context.Context, user string, id uuid.UUID, req UpdateTaskInputRequest) error {
+	res, err := c.Request(ctx, http.MethodPatch, fmt.Sprintf("/api/v2/tasks/%s/%s/input", user, id.String()), req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusNoContent {
+		return ReadBodyAsError(res)
+	}
+	return nil
+}
+
+// PauseTaskResponse represents the response from pausing a task.
+type PauseTaskResponse struct {
+	WorkspaceBuild *WorkspaceBuild `json:"workspace_build"`
+}
+
+// PauseTask pauses a task by stopping its workspace.
+func (c *Client) PauseTask(ctx context.Context, user string, id uuid.UUID) (PauseTaskResponse, error) {
+	res, err := c.Request(ctx, http.MethodPost, fmt.Sprintf("/api/v2/tasks/%s/%s/pause", user, id.String()), nil)
+	if err != nil {
+		return PauseTaskResponse{}, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusAccepted {
+		return PauseTaskResponse{}, ReadBodyAsError(res)
+	}
+
+	var resp PauseTaskResponse
+	if err := json.NewDecoder(res.Body).Decode(&resp); err != nil {
+		return PauseTaskResponse{}, err
+	}
+
+	return resp, nil
+}
+
+// ResumeTaskResponse represents the response from resuming a task.
+type ResumeTaskResponse struct {
+	WorkspaceBuild *WorkspaceBuild `json:"workspace_build"`
+}
+
+func (c *Client) ResumeTask(ctx context.Context, user string, id uuid.UUID) (ResumeTaskResponse, error) {
+	res, err := c.Request(ctx, http.MethodPost, fmt.Sprintf("/api/v2/tasks/%s/%s/resume", user, id.String()), nil)
+	if err != nil {
+		return ResumeTaskResponse{}, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusAccepted {
+		return ResumeTaskResponse{}, ReadBodyAsError(res)
+	}
+
+	var resp ResumeTaskResponse
+	if err := json.NewDecoder(res.Body).Decode(&resp); err != nil {
+		return ResumeTaskResponse{}, err
+	}
+
+	return resp, nil
+}
+
 // TaskLogType indicates the source of a task log entry.
-//
-// Experimental: This type is experimental and may change in the future.
 type TaskLogType string
 
 // TaskLogType enums.
@@ -396,8 +386,6 @@ const (
 )
 
 // TaskLogEntry represents a single log entry for a task.
-//
-// Experimental: This type is experimental and may change in the future.
 type TaskLogEntry struct {
 	ID      int         `json:"id" table:"id"`
 	Content string      `json:"content" table:"content"`
@@ -405,18 +393,18 @@ type TaskLogEntry struct {
 	Time    time.Time   `json:"time" format:"date-time" table:"time,default_sort"`
 }
 
-// TaskLogsResponse contains the logs for a task.
-//
-// Experimental: This type is experimental and may change in the future.
+// TaskLogsResponse contains task logs and metadata. When snapshot is false,
+// logs are fetched live from the task app. When snapshot is true, logs are
+// fetched from a stored snapshot captured during pause.
 type TaskLogsResponse struct {
-	Logs []TaskLogEntry `json:"logs"`
+	Logs       []TaskLogEntry `json:"logs"`
+	Snapshot   bool           `json:"snapshot,omitempty"`
+	SnapshotAt *time.Time     `json:"snapshot_at,omitempty"`
 }
 
-// TaskLogs retrieves logs from the task's sidebar app via the experimental API.
-//
-// Experimental: This method is experimental and may change in the future.
-func (c *ExperimentalClient) TaskLogs(ctx context.Context, user string, id uuid.UUID) (TaskLogsResponse, error) {
-	res, err := c.Request(ctx, http.MethodGet, fmt.Sprintf("/api/experimental/tasks/%s/%s/logs", user, id.String()), nil)
+// TaskLogs retrieves logs from the task app.
+func (c *Client) TaskLogs(ctx context.Context, user string, id uuid.UUID) (TaskLogsResponse, error) {
+	res, err := c.Request(ctx, http.MethodGet, fmt.Sprintf("/api/v2/tasks/%s/%s/logs", user, id.String()), nil)
 	if err != nil {
 		return TaskLogsResponse{}, err
 	}

@@ -1,10 +1,23 @@
-import { getErrorDetail, getErrorMessage } from "api/errors";
-import type { Task } from "api/typesGenerated";
-import { Avatar } from "components/Avatar/Avatar";
-import { AvatarData } from "components/Avatar/AvatarData";
-import { AvatarDataSkeleton } from "components/Avatar/AvatarDataSkeleton";
-import { Button } from "components/Button/Button";
-import { Skeleton } from "components/Skeleton/Skeleton";
+import { EllipsisVerticalIcon, RotateCcwIcon, TrashIcon } from "lucide-react";
+import { type FC, type ReactNode, useState } from "react";
+import { useMutation, useQueryClient } from "react-query";
+import { useNavigate } from "react-router";
+import { toast } from "sonner";
+import { getErrorDetail, getErrorMessage } from "#/api/errors";
+import { pauseTask, resumeTask } from "#/api/queries/tasks";
+import type { Task } from "#/api/typesGenerated";
+import { Avatar } from "#/components/Avatar/Avatar";
+import { AvatarData } from "#/components/Avatar/AvatarData";
+import { AvatarDataSkeleton } from "#/components/Avatar/AvatarDataSkeleton";
+import { Button } from "#/components/Button/Button";
+import { Checkbox } from "#/components/Checkbox/Checkbox";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "#/components/DropdownMenu/DropdownMenu";
+import { Skeleton } from "#/components/Skeleton/Skeleton";
 import {
 	Table,
 	TableBody,
@@ -12,31 +25,37 @@ import {
 	TableHead,
 	TableHeader,
 	TableRow,
-} from "components/Table/Table";
+} from "#/components/Table/Table";
 import {
 	TableLoaderSkeleton,
 	TableRowSkeleton,
-} from "components/TableLoader/TableLoader";
+} from "#/components/TableLoader/TableLoader";
+import { useClickableTableRow } from "#/hooks/useClickableTableRow";
+import { TaskActionButton } from "#/modules/tasks/TaskActionButton";
+import { TaskDeleteDialog } from "#/modules/tasks/TaskDeleteDialog/TaskDeleteDialog";
+import { TaskStatus } from "#/modules/tasks/TaskStatus/TaskStatus";
 import {
-	Tooltip,
-	TooltipContent,
-	TooltipProvider,
-	TooltipTrigger,
-} from "components/Tooltip/Tooltip";
-import { RotateCcwIcon, TrashIcon } from "lucide-react";
-import { TaskDeleteDialog } from "modules/tasks/TaskDeleteDialog/TaskDeleteDialog";
-import { TaskStatus } from "modules/tasks/TaskStatus/TaskStatus";
-import { type FC, type ReactNode, useState } from "react";
-import { Link as RouterLink } from "react-router";
-import { relativeTime } from "utils/time";
+	canPauseTask,
+	canResumeTask,
+	isPauseDisabled,
+} from "#/modules/tasks/taskActions";
+import { relativeTime } from "#/utils/time";
 
 type TasksTableProps = {
 	tasks: readonly Task[] | undefined;
 	error: unknown;
 	onRetry: () => void;
+	checkedTaskIds?: Set<string>;
+	onCheckChange?: (checkedTaskIds: Set<string>) => void;
 };
 
-export const TasksTable: FC<TasksTableProps> = ({ tasks, error, onRetry }) => {
+export const TasksTable: FC<TasksTableProps> = ({
+	tasks,
+	error,
+	onRetry,
+	checkedTaskIds = new Set(),
+	onCheckChange,
+}) => {
 	let body: ReactNode = null;
 
 	if (error) {
@@ -46,20 +65,61 @@ export const TasksTable: FC<TasksTableProps> = ({ tasks, error, onRetry }) => {
 	} else if (tasks.length === 0) {
 		body = <TasksEmpty />;
 	} else {
-		body = tasks.map((task) => <TaskRow key={task.id} task={task} />);
+		body = tasks.map((task) => {
+			const checked = checkedTaskIds.has(task.id);
+			return (
+				<TaskRow
+					key={task.id}
+					task={task}
+					checked={checked}
+					onCheckChange={(taskId, checked) => {
+						if (!onCheckChange) return;
+						const newIds = new Set(checkedTaskIds);
+						if (checked) {
+							newIds.add(taskId);
+						} else {
+							newIds.delete(taskId);
+						}
+						onCheckChange(newIds);
+					}}
+				/>
+			);
+		});
 	}
 
 	return (
-		<Table className="mt-4">
+		<Table>
 			<TableHeader>
 				<TableRow>
-					<TableHead>Task</TableHead>
+					<TableHead className="w-1/3">
+						<div className="flex items-center gap-5">
+							<Checkbox
+								disabled={!tasks || tasks.length === 0}
+								checked={
+									Boolean(tasks) && checkedTaskIds.size === tasks?.length
+								}
+								onCheckedChange={(checked) => {
+									if (!tasks || !onCheckChange) {
+										return;
+									}
+
+									if (!checked) {
+										onCheckChange(new Set());
+									} else {
+										onCheckChange(new Set(tasks.map((t) => t.id)));
+									}
+								}}
+								aria-label="Select all tasks"
+							/>
+							Task
+						</div>
+					</TableHead>
 					<TableHead>Status</TableHead>
 					<TableHead>Created by</TableHead>
 					<TableHead />
 				</TableRow>
 			</TableHeader>
-			<TableBody>{body}</TableBody>
+			<TableBody className="[&_td]:h-[72px]">{body}</TableBody>
 		</Table>
 	);
 };
@@ -95,7 +155,7 @@ const TasksErrorBody: FC<TasksErrorBodyProps> = ({ error, onRetry }) => {
 const TasksEmpty: FC = () => {
 	return (
 		<TableRow>
-			<TableCell colSpan={999} className="text-center">
+			<TableCell colSpan={4} className="text-center">
 				<div className="w-full min-h-80 p-4 flex items-center justify-center">
 					<div className="flex flex-col items-center">
 						<h3 className="m-0 font-medium text-content-primary text-base">
@@ -111,40 +171,84 @@ const TasksEmpty: FC = () => {
 	);
 };
 
-type TaskRowProps = { task: Task };
+type TaskRowProps = {
+	task: Task;
+	checked: boolean;
+	onCheckChange: (taskId: string, checked: boolean) => void;
+};
 
-const TaskRow: FC<TaskRowProps> = ({ task }) => {
+const TaskRow: FC<TaskRowProps> = ({ task, checked, onCheckChange }) => {
 	const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
 	const templateDisplayName = task.template_display_name ?? task.template_name;
+	const navigate = useNavigate();
+
+	const showPause = canPauseTask(task.status) && task.workspace_id;
+	const pauseDisabled = isPauseDisabled(task.status);
+	const showResume = canResumeTask(task.status) && task.workspace_id;
+
+	const queryClient = useQueryClient();
+	const pauseMutation = useMutation({
+		...pauseTask(task, queryClient),
+		onError: (error: unknown) => {
+			toast.error(getErrorMessage(error, "Failed to pause task."), {
+				description: getErrorDetail(error),
+			});
+		},
+	});
+	const resumeMutation = useMutation({
+		...resumeTask(task, queryClient),
+		onError: (error: unknown) => {
+			toast.error(getErrorMessage(error, "Failed to resume task."), {
+				description: getErrorDetail(error),
+			});
+		},
+	});
+
+	const taskPageLink = `/tasks/${task.owner_name}/${task.id}`;
+	// Discard role, breaks Chromatic.
+	const { role, ...clickableRowProps } = useClickableTableRow({
+		onClick: () => {
+			navigate(taskPageLink);
+		},
+	});
 
 	return (
 		<>
-			<TableRow className="relative" hover>
+			<TableRow
+				key={task.id}
+				data-testid={`task-${task.id}`}
+				{...clickableRowProps}
+			>
 				<TableCell>
-					<AvatarData
-						title={
-							<>
-								<span className="block max-w-[520px] overflow-hidden text-ellipsis whitespace-nowrap">
-									{task.initial_prompt}
+					<div className="flex items-center gap-5">
+						<Checkbox
+							data-testid={`checkbox-${task.id}`}
+							checked={checked}
+							onClick={(e) => {
+								e.stopPropagation();
+							}}
+							onCheckedChange={(checked) => {
+								onCheckChange(task.id, Boolean(checked));
+							}}
+							aria-label={`Select task ${task.initial_prompt}`}
+						/>
+						<AvatarData
+							title={
+								<span className="block max-w-[520px] truncate">
+									{task.display_name}
 								</span>
-								<RouterLink
-									to={`/tasks/${task.owner_name}/${task.id}`}
-									className="absolute inset-0"
-								>
-									<span className="sr-only">Access task</span>
-								</RouterLink>
-							</>
-						}
-						subtitle={templateDisplayName}
-						avatar={
-							<Avatar
-								size="lg"
-								variant="icon"
-								src={task.template_icon}
-								fallback={templateDisplayName}
-							/>
-						}
-					/>
+							}
+							subtitle={templateDisplayName}
+							avatar={
+								<Avatar
+									size="lg"
+									variant="icon"
+									src={task.template_icon}
+									fallback={templateDisplayName}
+								/>
+							}
+						/>
+					</div>
 				</TableCell>
 				<TableCell>
 					<TaskStatus
@@ -165,22 +269,47 @@ const TaskRow: FC<TaskRowProps> = ({ task }) => {
 					/>
 				</TableCell>
 				<TableCell className="text-right">
-					<TooltipProvider>
-						<Tooltip>
-							<TooltipTrigger asChild>
+					<div className="flex items-center justify-end gap-1">
+						{showPause && (
+							<TaskActionButton
+								action="pause"
+								disabled={pauseDisabled}
+								loading={pauseMutation.isPending}
+								onClick={pauseMutation.mutate}
+							/>
+						)}
+						{showResume && (
+							<TaskActionButton
+								action="resume"
+								loading={resumeMutation.isPending}
+								onClick={resumeMutation.mutate}
+							/>
+						)}
+						<DropdownMenu>
+							<DropdownMenuTrigger asChild>
 								<Button
-									size="icon"
-									variant="outline"
-									className="relative z-50"
-									onClick={() => setIsDeleteDialogOpen(true)}
+									size="icon-lg"
+									variant="subtle"
+									onClick={(e) => e.stopPropagation()}
 								>
-									<span className="sr-only">Delete task</span>
-									<TrashIcon />
+									<EllipsisVerticalIcon aria-hidden="true" />
+									<span className="sr-only">Show task actions</span>
 								</Button>
-							</TooltipTrigger>
-							<TooltipContent>Delete task</TooltipContent>
-						</Tooltip>
-					</TooltipProvider>
+							</DropdownMenuTrigger>
+							<DropdownMenuContent align="end">
+								<DropdownMenuItem
+									className="text-content-destructive focus:text-content-destructive"
+									onClick={(e) => {
+										e.stopPropagation();
+										setIsDeleteDialogOpen(true);
+									}}
+								>
+									<TrashIcon />
+									Delete&hellip;
+								</DropdownMenuItem>
+							</DropdownMenuContent>
+						</DropdownMenu>
+					</div>
 				</TableCell>
 			</TableRow>
 
@@ -200,7 +329,10 @@ const TasksSkeleton: FC = () => {
 		<TableLoaderSkeleton>
 			<TableRowSkeleton>
 				<TableCell>
-					<AvatarDataSkeleton />
+					<div className="flex items-center gap-5">
+						<Checkbox disabled />
+						<AvatarDataSkeleton />
+					</div>
 				</TableCell>
 				<TableCell>
 					<Skeleton className="w-[100px] h-6" />

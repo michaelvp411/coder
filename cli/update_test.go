@@ -154,6 +154,47 @@ func TestUpdate(t *testing.T) {
 		// Then: we expect 3 builds, as we manually stopped the workspace.
 		require.Equal(t, int32(3), ws.LatestBuild.BuildNumber, "workspace must have 3 builds after update")
 	})
+
+	// Verifies that --use-parameter-defaults auto-accepts new
+	// parameters added in a template version update.
+	t.Run("UseParameterDefaults", func(t *testing.T) {
+		t.Parallel()
+
+		client := coderdtest.New(t, &coderdtest.Options{IncludeProvisionerDaemon: true})
+		owner := coderdtest.CreateFirstUser(t, client)
+		member, _ := coderdtest.CreateAnotherUser(t, client, owner.OrganizationID)
+		version1 := coderdtest.CreateTemplateVersion(t, client, owner.OrganizationID, nil)
+		coderdtest.AwaitTemplateVersionJobCompleted(t, client, version1.ID)
+		template := coderdtest.CreateTemplate(t, client, owner.OrganizationID, version1.ID)
+
+		ws := coderdtest.CreateWorkspace(t, member, template.ID, func(cwr *codersdk.CreateWorkspaceRequest) {
+			cwr.Name = "my-workspace"
+		})
+		coderdtest.AwaitWorkspaceBuildJobCompleted(t, client, ws.LatestBuild.ID)
+
+		// Push a new template version that adds a parameter with a default.
+		version2 := coderdtest.UpdateTemplateVersion(t, client, owner.OrganizationID,
+			prepareEchoResponses([]*proto.RichParameter{
+				{Name: "new_param", Type: "string", Mutable: true, DefaultValue: "foobar"},
+			}), template.ID)
+		coderdtest.AwaitTemplateVersionJobCompleted(t, client, version2.ID)
+		ctx := testutil.Context(t, testutil.WaitLong)
+		err := client.UpdateActiveTemplateVersion(ctx, template.ID, codersdk.UpdateActiveTemplateVersion{ID: version2.ID})
+		require.NoError(t, err)
+
+		inv, root := clitest.New(t, "update", "my-workspace", "--use-parameter-defaults")
+		clitest.SetupConfig(t, member, root)
+		err = inv.Run()
+		require.NoError(t, err, "update with --use-parameter-defaults should not prompt")
+
+		ws, err = member.WorkspaceByOwnerAndName(ctx, codersdk.Me, "my-workspace", codersdk.WorkspaceOptions{})
+		require.NoError(t, err)
+		require.Equal(t, version2.ID.String(), ws.LatestBuild.TemplateVersionID.String())
+
+		buildParams, err := member.WorkspaceBuildParameters(ctx, ws.LatestBuild.ID)
+		require.NoError(t, err)
+		assert.Contains(t, buildParams, codersdk.WorkspaceBuildParameter{Name: "new_param", Value: "foobar"})
+	})
 }
 
 func TestUpdateWithRichParameters(t *testing.T) {
@@ -413,13 +454,13 @@ func TestUpdateValidateRichParameters(t *testing.T) {
 		}()
 
 		pty.ExpectMatch(stringParameterName)
-		pty.ExpectMatch("> Enter a value (default: \"\"): ")
+		pty.ExpectMatch("> Enter a value: ")
 		pty.WriteLine("$$")
 		pty.ExpectMatch("does not match")
-		pty.ExpectMatch("> Enter a value (default: \"\"): ")
-		pty.WriteLine("")
+		pty.ExpectMatch("> Enter a value: ")
+		pty.WriteLine("ABC")
 		pty.ExpectMatch("does not match")
-		pty.ExpectMatch("> Enter a value (default: \"\"): ")
+		pty.ExpectMatch("> Enter a value: ")
 		pty.WriteLine("abc")
 		_ = testutil.TryReceive(ctx, t, doneChan)
 	})
@@ -459,13 +500,13 @@ func TestUpdateValidateRichParameters(t *testing.T) {
 		}()
 
 		pty.ExpectMatch(numberParameterName)
-		pty.ExpectMatch("> Enter a value (default: \"\"): ")
+		pty.ExpectMatch("> Enter a value: ")
 		pty.WriteLine("12")
 		pty.ExpectMatch("is more than the maximum")
-		pty.ExpectMatch("> Enter a value (default: \"\"): ")
-		pty.WriteLine("")
+		pty.ExpectMatch("> Enter a value: ")
+		pty.WriteLine("notanumber")
 		pty.ExpectMatch("is not a number")
-		pty.ExpectMatch("> Enter a value (default: \"\"): ")
+		pty.ExpectMatch("> Enter a value: ")
 		pty.WriteLine("8")
 		_ = testutil.TryReceive(ctx, t, doneChan)
 	})
@@ -505,13 +546,13 @@ func TestUpdateValidateRichParameters(t *testing.T) {
 		}()
 
 		pty.ExpectMatch(boolParameterName)
-		pty.ExpectMatch("> Enter a value (default: \"\"): ")
+		pty.ExpectMatch("> Enter a value: ")
 		pty.WriteLine("cat")
 		pty.ExpectMatch("boolean value can be either \"true\" or \"false\"")
-		pty.ExpectMatch("> Enter a value (default: \"\"): ")
-		pty.WriteLine("")
+		pty.ExpectMatch("> Enter a value: ")
+		pty.WriteLine("dog")
 		pty.ExpectMatch("boolean value can be either \"true\" or \"false\"")
-		pty.ExpectMatch("> Enter a value (default: \"\"): ")
+		pty.ExpectMatch("> Enter a value: ")
 		pty.WriteLine("false")
 		_ = testutil.TryReceive(ctx, t, doneChan)
 	})
@@ -989,5 +1030,75 @@ func TestUpdateValidateRichParameters(t *testing.T) {
 		}
 
 		_ = testutil.TryReceive(ctx, t, doneChan)
+	})
+
+	t.Run("NewImmutableParameterViaFlag", func(t *testing.T) {
+		t.Parallel()
+
+		// Create template and workspace with only a mutable parameter.
+		client := coderdtest.New(t, &coderdtest.Options{IncludeProvisionerDaemon: true})
+		owner := coderdtest.CreateFirstUser(t, client)
+		member, memberUser := coderdtest.CreateAnotherUser(t, client, owner.OrganizationID)
+
+		templateParameters := []*proto.RichParameter{
+			{Name: stringParameterName, Type: "string", Mutable: true, Required: true, Options: []*proto.RichParameterOption{
+				{Name: "First option", Description: "This is first option", Value: "1st"},
+				{Name: "Second option", Description: "This is second option", Value: "2nd"},
+			}},
+		}
+		version := coderdtest.CreateTemplateVersion(t, client, owner.OrganizationID, prepareEchoResponses(templateParameters))
+		coderdtest.AwaitTemplateVersionJobCompleted(t, client, version.ID)
+		template := coderdtest.CreateTemplate(t, client, owner.OrganizationID, version.ID)
+
+		inv, root := clitest.New(t, "create", "my-workspace", "--yes", "--template", template.Name, "--parameter", fmt.Sprintf("%s=%s", stringParameterName, "1st"))
+		clitest.SetupConfig(t, member, root)
+		err := inv.Run()
+		require.NoError(t, err)
+
+		// Update template: add a new immutable parameter.
+		updatedTemplateParameters := []*proto.RichParameter{
+			templateParameters[0],
+			{Name: immutableParameterName, Type: "string", Mutable: false, Required: true, Options: []*proto.RichParameterOption{
+				{Name: "fir", Description: "First option for immutable parameter", Value: "I"},
+				{Name: "sec", Description: "Second option for immutable parameter", Value: "II"},
+			}},
+		}
+
+		updatedVersion := coderdtest.UpdateTemplateVersion(t, client, owner.OrganizationID, prepareEchoResponses(updatedTemplateParameters), template.ID)
+		coderdtest.AwaitTemplateVersionJobCompleted(t, client, updatedVersion.ID)
+		err = client.UpdateActiveTemplateVersion(context.Background(), template.ID, codersdk.UpdateActiveTemplateVersion{
+			ID: updatedVersion.ID,
+		})
+		require.NoError(t, err)
+
+		// Update workspace, supplying the new immutable parameter via
+		// the --parameter flag. This should succeed because it's the
+		// first time this parameter is being set.
+		inv, root = clitest.New(t, "update", "my-workspace",
+			"--parameter", fmt.Sprintf("%s=%s", immutableParameterName, "II"))
+		clitest.SetupConfig(t, member, root)
+
+		pty := ptytest.New(t).Attach(inv)
+		doneChan := make(chan struct{})
+		go func() {
+			defer close(doneChan)
+			err := inv.Run()
+			assert.NoError(t, err)
+		}()
+
+		pty.ExpectMatch("Planning workspace")
+
+		ctx := testutil.Context(t, testutil.WaitLong)
+		_ = testutil.TryReceive(ctx, t, doneChan)
+
+		// Verify the immutable parameter was set correctly.
+		workspace, err := client.WorkspaceByOwnerAndName(ctx, memberUser.ID.String(), "my-workspace", codersdk.WorkspaceOptions{})
+		require.NoError(t, err)
+		actualParameters, err := client.WorkspaceBuildParameters(ctx, workspace.LatestBuild.ID)
+		require.NoError(t, err)
+		require.Contains(t, actualParameters, codersdk.WorkspaceBuildParameter{
+			Name:  immutableParameterName,
+			Value: "II",
+		})
 	})
 }

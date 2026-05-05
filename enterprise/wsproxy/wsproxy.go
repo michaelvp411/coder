@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"expvar"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -25,7 +26,7 @@ import (
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/types/key"
 
-	"cdr.dev/slog"
+	"cdr.dev/slog/v3"
 	"github.com/coder/coder/v2/buildinfo"
 	"github.com/coder/coder/v2/cli/cliutil"
 	"github.com/coder/coder/v2/coderd"
@@ -39,9 +40,16 @@ import (
 	"github.com/coder/coder/v2/enterprise/derpmesh"
 	"github.com/coder/coder/v2/enterprise/replicasync"
 	"github.com/coder/coder/v2/enterprise/wsproxy/wsproxysdk"
+	sharedhttpmw "github.com/coder/coder/v2/httpmw"
 	"github.com/coder/coder/v2/site"
 	"github.com/coder/coder/v2/tailnet"
+	"github.com/coder/coder/v2/tailnet/derpmetrics"
 )
+
+// expDERPOnce guards the global expvar.Publish call for the DERP server.
+// expvar panics on duplicate registration, and tests may create multiple
+// servers in the same process.
+var expDERPOnce sync.Once
 
 type Options struct {
 	Logger      slog.Logger
@@ -195,6 +203,17 @@ func New(ctx context.Context, opts *Options) (*Server, error) {
 		return nil, xerrors.Errorf("create DERP mesh tls config: %w", err)
 	}
 	derpServer := derp.NewServer(key.NewNode(), tailnet.Logger(opts.Logger.Named("net.derp")))
+	// Publish DERP stats to expvar, available via the pprof
+	// debug server (--pprof-enable) at /debug/vars. This avoids
+	// exposing expvar on the public HTTP router.
+	expDERPOnce.Do(func() {
+		if expvar.Get("derp") == nil {
+			expvar.Publish("derp", derpServer.ExpVar())
+		}
+	})
+	if opts.PrometheusRegistry != nil {
+		opts.PrometheusRegistry.MustRegister(derpmetrics.NewDERPExpvarCollector(derpServer))
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -328,9 +347,10 @@ func New(ctx context.Context, opts *Options) (*Server, error) {
 	// Persistent middlewares to all routes
 	r.Use(
 		// TODO: @emyrk Should we standardize these in some other package?
-		httpmw.Recover(s.Logger),
+		sharedhttpmw.Recover(s.Logger),
 		httpmw.WithProfilingLabels,
 		tracing.StatusWriterMiddleware,
+		opts.CookieConfig.Middleware,
 		tracing.Middleware(s.TracerProvider),
 		httpmw.AttachRequestID,
 		httpmw.ExtractRealIP(s.Options.RealIPConfig),
@@ -378,8 +398,12 @@ func New(ctx context.Context, opts *Options) (*Server, error) {
 					HideStatus: true,
 					Description: "This workspace proxy is DERP-only and cannot be used for browser connections. " +
 						"Please use a different region directly from the dashboard. Click to be redirected!",
-					RetryEnabled: false,
-					DashboardURL: opts.DashboardURL.String(),
+					Actions: []site.Action{
+						{
+							URL:  opts.DashboardURL.String(),
+							Text: "Back to site",
+						},
+					},
 				})
 			}
 			serveDerpOnlyHandler := func(r chi.Router) {
@@ -421,8 +445,12 @@ func New(ctx context.Context, opts *Options) (*Server, error) {
 			HideStatus: true,
 			Description: "Workspace Proxies route traffic in terminals and apps directly to your workspace. " +
 				"This page must be loaded from the dashboard. Click to be redirected!",
-			RetryEnabled: false,
-			DashboardURL: opts.DashboardURL.String(),
+			Actions: []site.Action{
+				{
+					URL:  opts.DashboardURL.String(),
+					Text: "Back to site",
+				},
+			},
 		})
 	})
 

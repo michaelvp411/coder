@@ -1,50 +1,50 @@
-import type { Workspace } from "api/typesGenerated";
-import { Button } from "components/Button/Button";
+import { ChevronDownIcon, LayoutGridIcon, TerminalIcon } from "lucide-react";
+import { type FC, useState } from "react";
+import { type LinkProps, Link as RouterLink } from "react-router";
+import type { Task, Workspace } from "#/api/typesGenerated";
+import { Button } from "#/components/Button/Button";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
 	DropdownMenuTrigger,
-} from "components/DropdownMenu/DropdownMenu";
-import { ExternalImage } from "components/ExternalImage/ExternalImage";
-import { InfoTooltip } from "components/InfoTooltip/InfoTooltip";
-import { Link } from "components/Link/Link";
-import { ScrollArea, ScrollBar } from "components/ScrollArea/ScrollArea";
-import { ChevronDownIcon, LayoutGridIcon, TerminalIcon } from "lucide-react";
-import { getTerminalHref } from "modules/apps/apps";
-import { useAppLink } from "modules/apps/useAppLink";
+} from "#/components/DropdownMenu/DropdownMenu";
+import { ExternalImage } from "#/components/ExternalImage/ExternalImage";
+import { InfoTooltip } from "#/components/InfoTooltip/InfoTooltip";
+import { Link } from "#/components/Link/Link";
+import { ScrollArea, ScrollBar } from "#/components/ScrollArea/ScrollArea";
+import { getTerminalHref } from "#/modules/apps/apps";
+import { useAppLink } from "#/modules/apps/useAppLink";
 import {
 	getAllAppsWithAgent,
 	type WorkspaceAppWithAgent,
-} from "modules/tasks/apps";
-import { type FC, useState } from "react";
-import { type LinkProps, Link as RouterLink } from "react-router";
-import { cn } from "utils/cn";
-import { docs } from "utils/docs";
+} from "#/modules/tasks/apps";
+import { cn } from "#/utils/cn";
+import { docs } from "#/utils/docs";
 import { TaskAppIFrame, TaskIframe } from "./TaskAppIframe";
 
 type TaskAppsProps = {
+	task: Task;
 	workspace: Workspace;
 };
 
 const TERMINAL_TAB_ID = "terminal";
 
-export const TaskApps: FC<TaskAppsProps> = ({ workspace }) => {
-	const apps = getAllAppsWithAgent(workspace).filter(
+export const TaskApps: FC<TaskAppsProps> = ({ task, workspace }) => {
+	const allApps = getAllAppsWithAgent(workspace);
+	const apps = allApps.filter(
 		// The Chat UI app will be displayed in the sidebar, so we don't want to
 		// show it as a web app.
-		(app) =>
-			app.id !== workspace.latest_build.task_app_id &&
-			app.health !== "disabled",
+		(app) => app.id !== task.workspace_app_id && !app.hidden,
 	);
 	const [embeddedApps, externalApps] = splitEmbeddedAndExternalApps(apps);
 	const [activeAppId, setActiveAppId] = useState(embeddedApps.at(0)?.id);
 	const hasAvailableAppsToDisplay =
 		embeddedApps.length > 0 || externalApps.length > 0;
-	const taskAgent = apps.at(0)?.agent;
+	const taskAgent = allApps.at(0)?.agent;
 	const terminalHref = getTerminalHref({
-		username: workspace.owner_name,
-		workspace: workspace.name,
+		username: task.owner_name,
+		workspace: task.workspace_name,
 		agent: taskAgent?.name,
 	});
 	const isTerminalActive = activeAppId === TERMINAL_TAB_ID;

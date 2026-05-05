@@ -13,6 +13,38 @@ You can install and run Coder using the official Docker images published on
 
 - 2 CPU cores and 4 GB memory free on your machine.
 
+<div class="tabs">
+
+## Install Coder via `docker compose`
+
+Coder publishes a
+[docker compose example](https://github.com/coder/coder/blob/main/compose.yaml)
+which includes a PostgreSQL container and volume.
+
+1. Make sure you have [Docker Compose](https://docs.docker.com/compose/install/)
+   installed.
+
+1. Download the
+   [`docker-compose.yaml`](https://github.com/coder/coder/blob/main/compose.yaml)
+   file.
+
+1. Update `group_add:` in `docker-compose.yaml` with the `gid` of `docker`
+   group. You can get the `docker` group `gid` by running the below command:
+
+   ```shell
+   getent group docker | cut -d: -f3
+   ```
+
+1. Start Coder with `docker compose up`
+
+1. Visit the web UI via the configured url.
+
+1. Follow the on-screen instructions log in and create your first template and
+   workspace
+
+Coder configuration is defined via environment variables. Learn more about
+Coder's [configuration options](../admin/setup/index.md).
+
 ## Install Coder via `docker run`
 
 ### Built-in database (quick)
@@ -47,35 +79,7 @@ docker run --rm -it \
   ghcr.io/coder/coder:latest
 ```
 
-## Install Coder via `docker compose`
-
-Coder's publishes a
-[docker compose example](https://github.com/coder/coder/blob/main/compose.yaml)
-which includes an PostgreSQL container and volume.
-
-1. Make sure you have [Docker Compose](https://docs.docker.com/compose/install/)
-   installed.
-
-1. Download the
-   [`docker-compose.yaml`](https://github.com/coder/coder/blob/main/compose.yaml)
-   file.
-
-1. Update `group_add:` in `docker-compose.yaml` with the `gid` of `docker`
-   group. You can get the `docker` group `gid` by running the below command:
-
-   ```shell
-   getent group docker | cut -d: -f3
-   ```
-
-1. Start Coder with `docker compose up`
-
-1. Visit the web UI via the configured url.
-
-1. Follow the on-screen instructions log in and create your first template and
-   workspace
-
-Coder configuration is defined via environment variables. Learn more about
-Coder's [configuration options](../admin/setup/index.md).
+</div>
 
 ## Install the preview release
 
@@ -92,6 +96,19 @@ Replace `ghcr.io/coder/coder:latest` in the `docker run` command in the
 
 ## Troubleshooting
 
+### Cannot connect to the Docker daemon
+
+If you see an error like:
+
+```text
+Error: Error pinging Docker server: Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?
+```
+
+Docker is not installed or not running on the host. Install Docker and start the
+daemon before creating a workspace from a Docker-based template. Refer to the
+[quickstart troubleshooting](../tutorials/quickstart.md#cannot-connect-to-the-docker-daemon)
+for platform-specific steps.
+
 ### Docker-based workspace is stuck in "Connecting..."
 
 Ensure you have an externally-reachable `CODER_ACCESS_URL` set. See
@@ -107,7 +124,7 @@ See Docker's official documentation to
 
 Coder runs as a non-root user, we use `--group-add` to ensure Coder has
 permissions to manage Docker via `docker.sock`. If the host systems
-`/var/run/docker.sock` is not group writeable or does not belong to the `docker`
+`/var/run/docker.sock` is not group writable or does not belong to the `docker`
 group, the above may not work as-is.
 
 ### I cannot add cloud-based templates

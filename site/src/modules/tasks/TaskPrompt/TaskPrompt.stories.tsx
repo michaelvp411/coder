@@ -1,7 +1,12 @@
+import type { Meta, StoryObj } from "@storybook/react-vite";
+import { expect, spyOn, userEvent, waitFor, within } from "storybook/test";
+import { API } from "#/api/api";
+import { templateVersionPresetsKey } from "#/api/queries/templates";
+import type { Task } from "#/api/typesGenerated";
 import {
-	MockAIPromptPresets,
 	MockPresets,
 	MockTask,
+	MockTaskPresets,
 	MockTasks,
 	MockTemplate,
 	MockTemplateVersion,
@@ -9,12 +14,8 @@ import {
 	MockTemplateVersionExternalAuthGithubAuthenticated,
 	MockUserOwner,
 	mockApiError,
-} from "testHelpers/entities";
-import { withAuthProvider, withGlobalSnackbar } from "testHelpers/storybook";
-import type { Meta, StoryObj } from "@storybook/react-vite";
-import { API } from "api/api";
-import type { Task } from "api/typesGenerated";
-import { expect, spyOn, userEvent, waitFor, within } from "storybook/test";
+} from "#/testHelpers/entities";
+import { withAuthProvider, withToaster } from "#/testHelpers/storybook";
 import type TasksPage from "../../../pages/TasksPage/TasksPage";
 import { TaskPrompt } from "./TaskPrompt";
 
@@ -72,11 +73,9 @@ export const WithPresets: Story = {
 	},
 };
 
-export const ReadOnlyPresetPrompt: Story = {
+export const WithAIPresets: Story = {
 	beforeEach: () => {
-		spyOn(API, "getTemplateVersionPresets").mockResolvedValue(
-			MockAIPromptPresets,
-		);
+		spyOn(API, "getTemplateVersionPresets").mockResolvedValue(MockTaskPresets);
 	},
 };
 
@@ -112,9 +111,9 @@ export const SubmitDisabledWhenPromptEmpty: Story = {
 };
 
 export const Submitting: Story = {
-	decorators: [withGlobalSnackbar],
+	decorators: [withToaster],
 	beforeEach: () => {
-		spyOn(API.experimental, "createTask").mockImplementation(
+		spyOn(API, "createTask").mockImplementation(
 			() =>
 				// Never resolve to keep the component in the submitting state for visual testing.
 				new Promise(() => {}),
@@ -141,7 +140,7 @@ export const Submitting: Story = {
 };
 
 export const OnSuccess: Story = {
-	decorators: [withGlobalSnackbar],
+	decorators: [withToaster],
 	parameters: {
 		permissions: {
 			updateTemplates: false,
@@ -153,7 +152,7 @@ export const OnSuccess: Story = {
 			...MockTemplate,
 			active_version_id: activeVersionId,
 		});
-		spyOn(API.experimental, "createTask").mockResolvedValue(MockTask);
+		spyOn(API, "createTask").mockResolvedValue(MockTask);
 	},
 	play: async ({ canvasElement, step }) => {
 		const canvas = within(canvasElement);
@@ -167,19 +166,16 @@ export const OnSuccess: Story = {
 		});
 
 		await step("Uses latest template version", () => {
-			expect(API.experimental.createTask).toHaveBeenCalledWith(
-				MockUserOwner.id,
-				{
-					input: MockNewTaskData.initial_prompt,
-					template_version_id: `${MockTemplate.active_version_id}-latest`,
-					template_version_preset_id: undefined,
-				},
-			);
+			expect(API.createTask).toHaveBeenCalledWith(MockUserOwner.id, {
+				input: MockNewTaskData.initial_prompt,
+				template_version_id: `${MockTemplate.active_version_id}-latest`,
+				template_version_preset_id: undefined,
+			});
 		});
 
 		await step("Displays success message", async () => {
 			const body = within(canvasElement.ownerDocument.body);
-			const successMessage = await body.findByText(/task created/i);
+			const successMessage = await body.findByText(/created successfully/i);
 			expect(successMessage).toBeInTheDocument();
 		});
 
@@ -191,7 +187,7 @@ export const OnSuccess: Story = {
 };
 
 export const ChangeTemplate: Story = {
-	decorators: [withGlobalSnackbar],
+	decorators: [withToaster],
 	args: {
 		templates: [
 			{
@@ -232,7 +228,7 @@ export const ChangeTemplate: Story = {
 			}
 			return Promise.resolve([]);
 		});
-		spyOn(API.experimental, "createTask").mockResolvedValue(MockTask);
+		spyOn(API, "createTask").mockResolvedValue(MockTask);
 	},
 	play: async ({ canvasElement, step }) => {
 		const canvas = within(canvasElement);
@@ -255,7 +251,7 @@ export const ChangeTemplate: Story = {
 };
 
 export const SelectTemplateVersion: Story = {
-	decorators: [withGlobalSnackbar],
+	decorators: [withToaster],
 	beforeEach: () => {
 		spyOn(API, "getTemplateVersions").mockResolvedValue([
 			{
@@ -268,7 +264,7 @@ export const SelectTemplateVersion: Story = {
 				name: "v1.0.0",
 			},
 		]);
-		spyOn(API.experimental, "createTask").mockResolvedValue(MockTask);
+		spyOn(API, "createTask").mockResolvedValue(MockTask);
 	},
 	play: async ({ canvasElement, step }) => {
 		const canvas = within(canvasElement);
@@ -295,30 +291,27 @@ export const SelectTemplateVersion: Story = {
 		});
 
 		await step("Uses selected version", () => {
-			expect(API.experimental.createTask).toHaveBeenCalledWith(
-				MockUserOwner.id,
-				{
-					input: MockNewTaskData.initial_prompt,
-					template_version_id: "test-template-version-2",
-					template_version_preset_id: undefined,
-				},
-			);
+			expect(API.createTask).toHaveBeenCalledWith(MockUserOwner.id, {
+				input: MockNewTaskData.initial_prompt,
+				template_version_id: "test-template-version-2",
+				template_version_preset_id: undefined,
+			});
 		});
 
 		await step("Displays success message", async () => {
 			const body = within(canvasElement.ownerDocument.body);
-			const successMessage = await body.findByText(/task created/i);
+			const successMessage = await body.findByText(/created successfully/i);
 			expect(successMessage).toBeInTheDocument();
 		});
 	},
 };
 
 export const OnError: Story = {
-	decorators: [withGlobalSnackbar],
+	decorators: [withToaster],
 	beforeEach: () => {
 		spyOn(API, "getTemplate").mockResolvedValue(MockTemplate);
-		spyOn(API.experimental, "getTasks").mockResolvedValue(MockTasks);
-		spyOn(API.experimental, "createTask").mockRejectedValue(
+		spyOn(API, "getTasks").mockResolvedValue(MockTasks);
+		spyOn(API, "createTask").mockRejectedValue(
 			mockApiError({
 				message: "Failed to create task",
 				detail: "You don't have permission to create tasks.",
@@ -344,10 +337,10 @@ export const OnError: Story = {
 
 export const AuthenticatedExternalAuth: Story = {
 	beforeEach: () => {
-		spyOn(API.experimental, "getTasks")
+		spyOn(API, "getTasks")
 			.mockResolvedValueOnce(MockTasks)
 			.mockResolvedValue([MockNewTaskData, ...MockTasks]);
-		spyOn(API.experimental, "createTask").mockResolvedValue(MockTask);
+		spyOn(API, "createTask").mockResolvedValue(MockTask);
 		spyOn(API, "getTemplateVersionExternalAuth").mockResolvedValue([
 			MockTemplateVersionExternalAuthGithubAuthenticated,
 		]);
@@ -370,10 +363,10 @@ export const AuthenticatedExternalAuth: Story = {
 
 export const MissingExternalAuth: Story = {
 	beforeEach: () => {
-		spyOn(API.experimental, "getTasks")
+		spyOn(API, "getTasks")
 			.mockResolvedValueOnce(MockTasks)
 			.mockResolvedValue([MockNewTaskData, ...MockTasks]);
-		spyOn(API.experimental, "createTask").mockResolvedValue(MockTask);
+		spyOn(API, "createTask").mockResolvedValue(MockTask);
 		spyOn(API, "getTemplateVersionExternalAuth").mockResolvedValue([
 			MockTemplateVersionExternalAuthGithub,
 		]);
@@ -396,10 +389,10 @@ export const MissingExternalAuth: Story = {
 
 export const ExternalAuthError: Story = {
 	beforeEach: () => {
-		spyOn(API.experimental, "getTasks")
+		spyOn(API, "getTasks")
 			.mockResolvedValueOnce(MockTasks)
 			.mockResolvedValue([MockNewTaskData, ...MockTasks]);
-		spyOn(API.experimental, "createTask").mockResolvedValue(MockTask);
+		spyOn(API, "createTask").mockResolvedValue(MockTask);
 		spyOn(API, "getTemplateVersionExternalAuth").mockRejectedValue(
 			mockApiError({
 				message: "Failed to load external auth",
@@ -417,7 +410,10 @@ export const ExternalAuthError: Story = {
 		});
 
 		await step("Renders error", async () => {
-			await canvas.findByText(/failed to load external auth/i);
+			const alert = await canvas.findByRole("alert");
+			await within(alert).findByRole("heading", {
+				name: /failed to load external auth/i,
+			});
 		});
 	},
 };
@@ -477,6 +473,192 @@ export const CheckExternalAuthOnChangingVersions: Story = {
 			expect(
 				canvas.queryByRole("button", { name: /connect to github/i }),
 			).not.toBeInTheDocument();
+		});
+	},
+};
+
+// Regression test introduced in https://github.com/coder/coder/pull/22032
+// A change was introduced that cause the focused selector to be mostly
+// hidden due to an introduced `overflow-hidden`. The change wasn't spotted
+// in the PR it was introduced as no stories triggered that behavior, so we
+// have added one to ensure the behavior doesn't regress.
+export const PresetSelectorFocused: Story = {
+	beforeEach: () => {
+		spyOn(API, "getTemplateVersionPresets").mockResolvedValue(
+			MockPresets.map((preset, i) => ({
+				...preset,
+				Icon: i === 0 ? "/icon/code.svg" : i === 1 ? "/icon/database.svg" : "",
+				Description: i === 0 ? "For everyday development work" : "",
+			})),
+		);
+	},
+	play: async ({ canvasElement }) => {
+		const canvas = within(canvasElement);
+		const presetSelect = await canvas.findByLabelText(/preset/i);
+		presetSelect.focus();
+	},
+};
+
+// Regression test for https://github.com/coder/coder/issues/22245
+// Dark monochrome icons (like GitHub or Tasks) were invisible on dark
+// backgrounds because icons used a plain <img> instead of
+// ExternalImage, which applies theme-aware CSS filters.
+export const IconContrast: Story = {
+	args: {
+		templates: [
+			{
+				...MockTemplate,
+				id: "github-template",
+				name: "github-template",
+				display_name: "GitHub",
+				icon: "/icon/github.svg",
+				active_version_id: MockTemplateVersion.id,
+			},
+			{
+				...MockTemplate,
+				id: "tasks-template",
+				name: "tasks-template",
+				display_name: "Tasks",
+				icon: "/icon/tasks.svg",
+				active_version_id: MockTemplateVersion.id,
+			},
+		],
+	},
+	parameters: {
+		queries: [
+			{
+				key: templateVersionPresetsKey(MockTemplateVersion.id),
+				data: [
+					{
+						...MockPresets[0],
+						Icon: "/icon/github.svg",
+					},
+					{
+						...MockPresets[1],
+						Icon: "/icon/tasks.svg",
+					},
+				],
+			},
+		],
+	},
+};
+
+export const CheckPresetsWhenChangingTemplate: Story = {
+	args: {
+		templates: [
+			{
+				...MockTemplate,
+				id: "claude-code",
+				name: "claude-code",
+				display_name: "Claude Code",
+				active_version_id: "claude-code-version",
+			},
+			{
+				...MockTemplate,
+				id: "codex",
+				name: "codex",
+				display_name: "Codex",
+				active_version_id: "codex-version",
+			},
+		],
+	},
+	beforeEach: () => {
+		spyOn(API, "getTemplateVersionPresets").mockImplementation((versionId) => {
+			if (versionId === "claude-code-version") {
+				return Promise.resolve([
+					{
+						...MockPresets[0],
+						ID: "claude-code-preset-1",
+						Name: "Claude Code Dev",
+					},
+				]);
+			}
+			if (versionId === "codex-version") {
+				return Promise.resolve([
+					{
+						...MockPresets[0],
+						ID: "codex-preset-1",
+						Name: "Codex Dev",
+					},
+				]);
+			}
+			return Promise.resolve([]);
+		});
+		spyOn(API, "getTemplateVersions").mockImplementation((templateId) => {
+			if (templateId === "claude-code") {
+				return Promise.resolve([
+					{
+						...MockTemplateVersion,
+						id: "claude-code-version",
+						name: "claude-code-version",
+					},
+				]);
+			}
+			if (templateId === "codex") {
+				return Promise.resolve([
+					{
+						...MockTemplateVersion,
+						id: "codex-version",
+						name: "codex-version",
+					},
+				]);
+			}
+			return Promise.resolve([]);
+		});
+	},
+	play: async ({ canvasElement, step }) => {
+		const canvas = within(canvasElement);
+		const body = within(canvasElement.ownerDocument.body);
+
+		await step("Presets are initially present", async () => {
+			const presetSelect = await canvas.findByLabelText(/preset/i);
+			await userEvent.click(presetSelect);
+
+			const options = await body.findAllByRole("option");
+			expect(options).toHaveLength(1);
+			expect(options[0]).toContainHTML("Claude Code Dev");
+
+			await userEvent.click(options[0]);
+		});
+
+		await step("Switch template", async () => {
+			const templateSelect = await canvas.findByLabelText(/select template/i);
+			await userEvent.click(templateSelect);
+
+			const codexTemplateOption = await body.findByRole("option", {
+				name: /codex/i,
+			});
+			await userEvent.click(codexTemplateOption);
+		});
+
+		await step("Presets are present in new template", async () => {
+			const presetSelect = await canvas.findByLabelText(/preset/i);
+			await userEvent.click(presetSelect);
+
+			const options = await body.findAllByRole("option");
+			expect(options).toHaveLength(1);
+			expect(options[0]).toContainHTML("Codex Dev");
+
+			await userEvent.click(options[0]);
+		});
+
+		await step("Switch template back", async () => {
+			const templateSelect = await canvas.findByLabelText(/select template/i);
+			await userEvent.click(templateSelect);
+
+			const codexTemplateOption = await body.findByRole("option", {
+				name: /claude code/i,
+			});
+			await userEvent.click(codexTemplateOption);
+		});
+
+		await step("Presets are present in original template", async () => {
+			const presetSelect = await canvas.findByLabelText(/preset/i);
+			await userEvent.click(presetSelect);
+
+			const options = await body.findAllByRole("option");
+			expect(options).toHaveLength(1);
+			expect(options[0]).toContainHTML("Claude Code Dev");
 		});
 	},
 };

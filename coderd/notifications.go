@@ -9,8 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"cdr.dev/slog"
-
+	"cdr.dev/slog/v3"
 	"github.com/coder/coder/v2/coderd/audit"
 	"github.com/coder/coder/v2/coderd/database"
 	"github.com/coder/coder/v2/coderd/database/dbauthz"
@@ -28,7 +27,7 @@ import (
 // @Produce json
 // @Tags Notifications
 // @Success 200 {object} codersdk.NotificationsSettings
-// @Router /notifications/settings [get]
+// @Router /api/v2/notifications/settings [get]
 func (api *API) notificationsSettings(rw http.ResponseWriter, r *http.Request) {
 	settingsJSON, err := api.Database.GetNotificationsSettings(r.Context())
 	if err != nil {
@@ -62,7 +61,7 @@ func (api *API) notificationsSettings(rw http.ResponseWriter, r *http.Request) {
 // @Param request body codersdk.NotificationsSettings true "Notifications settings request"
 // @Success 200 {object} codersdk.NotificationsSettings
 // @Success 304
-// @Router /notifications/settings [put]
+// @Router /api/v2/notifications/settings [put]
 func (api *API) putNotificationsSettings(rw http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -150,7 +149,7 @@ func (api *API) notificationTemplatesByKind(rw http.ResponseWriter, r *http.Requ
 // @Tags Notifications
 // @Success 200 {array} codersdk.NotificationTemplate
 // @Failure 500 {object} codersdk.Response "Failed to retrieve 'system' notifications template"
-// @Router /notifications/templates/system [get]
+// @Router /api/v2/notifications/templates/system [get]
 func (api *API) systemNotificationTemplates(rw http.ResponseWriter, r *http.Request) {
 	api.notificationTemplatesByKind(rw, r, database.NotificationTemplateKindSystem)
 }
@@ -162,7 +161,7 @@ func (api *API) systemNotificationTemplates(rw http.ResponseWriter, r *http.Requ
 // @Tags Notifications
 // @Success 200 {array} codersdk.NotificationTemplate
 // @Failure 500 {object} codersdk.Response "Failed to retrieve 'custom' notifications template"
-// @Router /notifications/templates/custom [get]
+// @Router /api/v2/notifications/templates/custom [get]
 func (api *API) customNotificationTemplates(rw http.ResponseWriter, r *http.Request) {
 	api.notificationTemplatesByKind(rw, r, database.NotificationTemplateKindCustom)
 }
@@ -173,7 +172,7 @@ func (api *API) customNotificationTemplates(rw http.ResponseWriter, r *http.Requ
 // @Produce json
 // @Tags Notifications
 // @Success 200 {array} codersdk.NotificationMethodsResponse
-// @Router /notifications/dispatch-methods [get]
+// @Router /api/v2/notifications/dispatch-methods [get]
 func (api *API) notificationDispatchMethods(rw http.ResponseWriter, r *http.Request) {
 	var methods []string
 	for _, nm := range database.AllNotificationMethodValues() {
@@ -196,7 +195,7 @@ func (api *API) notificationDispatchMethods(rw http.ResponseWriter, r *http.Requ
 // @Security CoderSessionToken
 // @Tags Notifications
 // @Success 200
-// @Router /notifications/test [post]
+// @Router /api/v2/notifications/test [post]
 func (api *API) postTestNotification(rw http.ResponseWriter, r *http.Request) {
 	var (
 		ctx = r.Context()
@@ -245,7 +244,7 @@ func (api *API) postTestNotification(rw http.ResponseWriter, r *http.Request) {
 // @Tags Notifications
 // @Param user path string true "User ID, name, or me"
 // @Success 200 {array} codersdk.NotificationPreference
-// @Router /users/{user}/notifications/preferences [get]
+// @Router /api/v2/users/{user}/notifications/preferences [get]
 func (api *API) userNotificationPreferences(rw http.ResponseWriter, r *http.Request) {
 	var (
 		ctx    = r.Context()
@@ -277,7 +276,7 @@ func (api *API) userNotificationPreferences(rw http.ResponseWriter, r *http.Requ
 // @Param request body codersdk.UpdateUserNotificationPreferences true "Preferences"
 // @Param user path string true "User ID, name, or me"
 // @Success 200 {array} codersdk.NotificationPreference
-// @Router /users/{user}/notifications/preferences [put]
+// @Router /api/v2/users/{user}/notifications/preferences [put]
 func (api *API) putUserNotificationPreferences(rw http.ResponseWriter, r *http.Request) {
 	var (
 		ctx    = r.Context()
@@ -354,7 +353,7 @@ func (api *API) putUserNotificationPreferences(rw http.ResponseWriter, r *http.R
 // @Failure 400 {object} codersdk.Response "Invalid request body"
 // @Failure 403 {object} codersdk.Response "System users cannot send custom notifications"
 // @Failure 500 {object} codersdk.Response "Failed to send custom notification"
-// @Router /notifications/custom [post]
+// @Router /api/v2/notifications/custom [post]
 func (api *API) postCustomNotification(rw http.ResponseWriter, r *http.Request) {
 	var (
 		ctx    = r.Context()

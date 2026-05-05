@@ -1,7 +1,6 @@
 import type { Interpolation, Theme } from "@emotion/react";
 import TextField from "@mui/material/TextField";
 import { type FC, type FormEvent, useId, useState } from "react";
-import { Stack } from "../../Stack/Stack";
 import { ConfirmDialog } from "../ConfirmDialog/ConfirmDialog";
 
 interface DeleteDialogProps {
@@ -62,23 +61,21 @@ export const DeleteDialog: FC<DeleteDialogProps> = ({
 			confirmText={confirmText}
 			description={
 				<>
-					<Stack spacing={1.5}>
+					<div className="flex flex-col gap-3">
 						<p>
 							{verb ?? "Deleting"} this {entity} is irreversible!
 						</p>
-
 						{Boolean(info) && <div css={styles.callout}>{info}</div>}
-
 						<p>
 							Type <strong>{name}</strong> below to confirm.
 						</p>
-					</Stack>
+					</div>
 
 					<form onSubmit={onSubmit}>
 						<TextField
 							fullWidth
 							autoFocus
-							css={{ marginTop: 24 }}
+							className="mt-6"
 							name="confirmation"
 							autoComplete="off"
 							id={`${hookId}-confirm`}

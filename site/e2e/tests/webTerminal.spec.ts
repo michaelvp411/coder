@@ -18,9 +18,9 @@ test.beforeEach(async ({ page }) => {
 test("web terminal", async ({ context, page }) => {
 	const token = randomUUID();
 	const template = await createTemplate(page, {
-		apply: [
+		graph: [
 			{
-				apply: {
+				graph: {
 					resources: [
 						{
 							agents: [
@@ -40,13 +40,16 @@ test("web terminal", async ({ context, page }) => {
 	const agent = await startAgent(page, token);
 	const terminal = await openTerminalWindow(page, context, workspaceName);
 
-	await terminal.waitForSelector("div.xterm-rows", {
+	await terminal.waitForSelector('[data-status="connected"]', {
 		state: "visible",
+		timeout: 30_000,
 	});
 
-	// Workaround: delay next steps as "div.xterm-rows" can be recreated/reattached
-	// after a couple of milliseconds.
-	await terminal.waitForTimeout(2000);
+	// Wait for xterm to render its row container and click to ensure
+	// the terminal has keyboard focus after the confirmation dialog.
+	const xtermRows = terminal.locator("div.xterm-rows");
+	await xtermRows.waitFor({ state: "visible" });
+	await xtermRows.click();
 
 	// Ensure that we can type in it
 	await terminal.keyboard.type("echo he${justabreak}llo123456");

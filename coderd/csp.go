@@ -4,10 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"cdr.dev/slog/v3"
 	"github.com/coder/coder/v2/coderd/httpapi"
 	"github.com/coder/coder/v2/codersdk"
-
-	"cdr.dev/slog"
 )
 
 type cspViolation struct {
@@ -23,7 +22,7 @@ type cspViolation struct {
 // @Tags General
 // @Param request body cspViolation true "Violation report"
 // @Success 200
-// @Router /csp/reports [post]
+// @Router /api/v2/csp/reports [post]
 func (api *API) logReportCSPViolations(rw http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var v cspViolation
@@ -39,7 +38,7 @@ func (api *API) logReportCSPViolations(rw http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	fields := make([]any, 0, len(v.Report))
+	fields := make([]slog.Field, 0, len(v.Report))
 	for k, v := range v.Report {
 		fields = append(fields, slog.F(k, v))
 	}

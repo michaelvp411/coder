@@ -1,9 +1,12 @@
 import { useTheme } from "@emotion/react";
-import IconButton from "@mui/material/IconButton";
-import type { APIKeyWithOwner } from "api/typesGenerated";
-import { ErrorAlert } from "components/Alert/ErrorAlert";
-import { ChooseOne, Cond } from "components/Conditionals/ChooseOne";
-import { Stack } from "components/Stack/Stack";
+import dayjs from "dayjs";
+import relativeTime from "dayjs/plugin/relativeTime";
+import { TrashIcon } from "lucide-react";
+import type { FC, ReactNode } from "react";
+import type { APIKeyWithOwner } from "#/api/typesGenerated";
+import { ErrorAlert } from "#/components/Alert/ErrorAlert";
+import { Button } from "#/components/Button/Button";
+import { ChooseOne, Cond } from "#/components/Conditionals/ChooseOne";
 import {
 	Table,
 	TableBody,
@@ -11,13 +14,9 @@ import {
 	TableHead,
 	TableHeader,
 	TableRow,
-} from "components/Table/Table";
-import { TableEmpty } from "components/TableEmpty/TableEmpty";
-import { TableLoader } from "components/TableLoader/TableLoader";
-import dayjs from "dayjs";
-import relativeTime from "dayjs/plugin/relativeTime";
-import { TrashIcon } from "lucide-react";
-import type { FC, ReactNode } from "react";
+} from "#/components/Table/Table";
+import { TableEmpty } from "#/components/TableEmpty/TableEmpty";
+import { TableLoader } from "#/components/TableLoader/TableLoader";
 
 dayjs.extend(relativeTime);
 
@@ -48,7 +47,7 @@ export const TokensPageView: FC<TokensPageViewProps> = ({
 	const theme = useTheme();
 
 	return (
-		<Stack>
+		<div className="flex flex-col gap-4">
 			{Boolean(getTokensError) && <ErrorAlert error={getTokensError} />}
 			{Boolean(deleteTokenError) && <ErrorAlert error={deleteTokenError} />}
 
@@ -110,15 +109,16 @@ export const TokensPageView: FC<TokensPageViewProps> = ({
 
 										<TableCell>
 											<span style={{ color: theme.palette.text.secondary }}>
-												<IconButton
+												<Button
 													onClick={() => {
 														onDelete(token);
 													}}
-													size="medium"
+													size="icon"
+													variant="destructive"
 													aria-label="Delete token"
 												>
 													<TrashIcon className="size-icon-sm" />
-												</IconButton>
+												</Button>
 											</span>
 										</TableCell>
 									</TableRow>
@@ -128,6 +128,6 @@ export const TokensPageView: FC<TokensPageViewProps> = ({
 					</ChooseOne>
 				</TableBody>
 			</Table>
-		</Stack>
+		</div>
 	);
 };

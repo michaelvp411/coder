@@ -7,16 +7,16 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"io"
 	"net/url"
+	"time"
 
 	"golang.org/x/xerrors"
 	"tailscale.com/derp"
 	"tailscale.com/types/key"
 
+	agplcoderd "github.com/coder/coder/v2/coderd"
 	"github.com/coder/coder/v2/coderd/database"
-	"github.com/coder/coder/v2/codersdk"
 	"github.com/coder/coder/v2/cryptorand"
 	"github.com/coder/coder/v2/enterprise/audit"
 	"github.com/coder/coder/v2/enterprise/audit/backends"
@@ -25,12 +25,9 @@ import (
 	"github.com/coder/coder/v2/enterprise/coderd/usage"
 	"github.com/coder/coder/v2/enterprise/dbcrypt"
 	"github.com/coder/coder/v2/enterprise/trialer"
-	"github.com/coder/coder/v2/enterprise/x/aibridged"
 	"github.com/coder/coder/v2/tailnet"
 	"github.com/coder/quartz"
 	"github.com/coder/serpent"
-
-	agplcoderd "github.com/coder/coder/v2/coderd"
 )
 
 func (r *RootCmd) Server(_ func()) *serpent.Command {
@@ -42,40 +39,44 @@ func (r *RootCmd) Server(_ func()) *serpent.Command {
 			}
 		}
 
+		// Always generate a mesh key, even if the built-in DERP server is
+		// disabled. This mesh key is still used by workspace proxies running
+		// HA.
+		var meshKey string
+		err := options.Database.InTx(func(tx database.Store) error {
+			// This will block until the lock is acquired, and will be
+			// automatically released when the transaction ends.
+			err := tx.AcquireLock(ctx, database.LockIDEnterpriseDeploymentSetup)
+			if err != nil {
+				return xerrors.Errorf("acquire lock: %w", err)
+			}
+
+			meshKey, err = tx.GetDERPMeshKey(ctx)
+			if err == nil {
+				return nil
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				return xerrors.Errorf("get DERP mesh key: %w", err)
+			}
+			meshKey, err = cryptorand.String(32)
+			if err != nil {
+				return xerrors.Errorf("generate DERP mesh key: %w", err)
+			}
+			err = tx.InsertDERPMeshKey(ctx, meshKey)
+			if err != nil {
+				return xerrors.Errorf("insert DERP mesh key: %w", err)
+			}
+			return nil
+		}, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		if meshKey == "" {
+			return nil, nil, xerrors.New("mesh key is empty")
+		}
+
 		if options.DeploymentValues.DERP.Server.Enable {
 			options.DERPServer = derp.NewServer(key.NewNode(), tailnet.Logger(options.Logger.Named("derp")))
-			var meshKey string
-			err := options.Database.InTx(func(tx database.Store) error {
-				// This will block until the lock is acquired, and will be
-				// automatically released when the transaction ends.
-				err := tx.AcquireLock(ctx, database.LockIDEnterpriseDeploymentSetup)
-				if err != nil {
-					return xerrors.Errorf("acquire lock: %w", err)
-				}
-
-				meshKey, err = tx.GetDERPMeshKey(ctx)
-				if err == nil {
-					return nil
-				}
-				if !errors.Is(err, sql.ErrNoRows) {
-					return xerrors.Errorf("get DERP mesh key: %w", err)
-				}
-				meshKey, err = cryptorand.String(32)
-				if err != nil {
-					return xerrors.Errorf("generate DERP mesh key: %w", err)
-				}
-				err = tx.InsertDERPMeshKey(ctx, meshKey)
-				if err != nil {
-					return xerrors.Errorf("insert DERP mesh key: %w", err)
-				}
-				return nil
-			}, nil)
-			if err != nil {
-				return nil, nil, err
-			}
-			if meshKey == "" {
-				return nil, nil, xerrors.New("mesh key is empty")
-			}
 			options.DERPServer.SetMeshKey(meshKey)
 		}
 
@@ -146,34 +147,62 @@ func (r *RootCmd) Server(_ func()) *serpent.Command {
 		}
 		closers.Add(publisher)
 
-		experiments := agplcoderd.ReadExperiments(options.Logger, options.DeploymentValues.Experiments.Value())
+		// usageCron are heartbeat events to the usage table. These events are eventually sent
+		// to Tallyman.
+		usageCron := usage.NewCron(quartz.NewReal(), options.Logger.Named("usage-cron"), options.Database, *options.UsageInserter.Load())
+		// ai-seats heartbeats track the number of users that have used an AI feature.
+		// These users consume a seat for the AI addon to our License.
+		_ = usageCron.Register(usage.CronJob{
+			Name:     "ai-seats",
+			Interval: usage.AISeatsInterval,
+			Jitter:   10 * time.Minute,
+			Fn:       usage.AISeatsHeartbeat(options.Database),
+		})
+		usageCron.Start(ctx)
+		closers.Add(usageCron)
 
-		// In-memory aibridge daemon.
-		// TODO(@deansheather): the lifecycle of the aibridged server is
-		// probably better managed by the enterprise API type itself. Managing
-		// it in the API type means we can avoid starting it up when the license
-		// is not entitled to the feature.
-		var aibridgeDaemon *aibridged.Server
-		if options.DeploymentValues.AI.BridgeConfig.Enabled {
-			if experiments.Enabled(codersdk.ExperimentAIBridge) {
-				aibridgeDaemon, err = newAIBridgeDaemon(api)
+		// Build the provider list and start AI Bridge daemons only when
+		// at least one of the bridge or proxy features is enabled.
+		bridgeEnabled := options.DeploymentValues.AI.BridgeConfig.Enabled.Value()
+		proxyEnabled := options.DeploymentValues.AI.BridgeProxyConfig.Enabled.Value()
+		if bridgeEnabled || proxyEnabled {
+			providers, err := buildProviders(options.DeploymentValues.AI.BridgeConfig)
+			if err != nil {
+				return nil, nil, xerrors.Errorf("build aibridge providers: %w", err)
+			}
+
+			// In-memory aibridge daemon.
+			// TODO(@deansheather): the lifecycle of the aibridged server is
+			// probably better managed by the enterprise API type itself. Managing
+			// it in the API type means we can avoid starting it up when the license
+			// is not entitled to the feature.
+			if bridgeEnabled {
+				aibridgeDaemon, err := newAIBridgeDaemon(api, providers)
 				if err != nil {
 					return nil, nil, xerrors.Errorf("create aibridged: %w", err)
 				}
 
 				api.RegisterInMemoryAIBridgedHTTPHandler(aibridgeDaemon)
 
-				// When running as an in-memory daemon, the HTTP handler is wired into the
-				// coderd API and therefore is subject to its context. Calling Close() on
-				// aibridged will NOT affect in-flight requests but those will be closed once
-				// the API server is itself shutdown.
+				// When running as an in-memory daemon, the HTTP handler is
+				// wired into the coderd API and therefore is subject to its
+				// context. Calling Close() on aibridged will NOT affect
+				// in-flight requests but those will be closed once the API
+				// server is itself shutdown.
 				closers.Add(aibridgeDaemon)
-			} else {
-				api.Logger.Warn(ctx, fmt.Sprintf("CODER_AIBRIDGE_ENABLED=true but experiment %q not enabled", codersdk.ExperimentAIBridge))
 			}
-		} else {
-			if experiments.Enabled(codersdk.ExperimentAIBridge) {
-				api.Logger.Warn(ctx, "aibridge experiment enabled but CODER_AIBRIDGE_ENABLED=false")
+
+			// In-memory AI Bridge Proxy daemon.
+			if proxyEnabled {
+				aiBridgeProxyServer, err := newAIBridgeProxyDaemon(api, providers)
+				if err != nil {
+					_ = closers.Close()
+					return nil, nil, xerrors.Errorf("create aibridgeproxyd: %w", err)
+				}
+				closers.Add(aiBridgeProxyServer)
+
+				// Register the handler so coderd can serve the proxy endpoints.
+				api.RegisterInMemoryAIBridgeProxydHTTPHandler(aiBridgeProxyServer.Handler())
 			}
 		}
 

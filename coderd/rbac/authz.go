@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ammario/tlru"
+	"github.com/google/uuid"
 	"github.com/open-policy-agent/opa/ast"
 	"github.com/open-policy-agent/opa/v1/rego"
 	"github.com/prometheus/client_golang/prometheus"
@@ -79,6 +80,10 @@ const (
 	SubjectTypeFileReader                   SubjectType = "file_reader"
 	SubjectTypeUsagePublisher               SubjectType = "usage_publisher"
 	SubjectAibridged                        SubjectType = "aibridged"
+	SubjectTypeDBPurge                      SubjectType = "dbpurge"
+	SubjectTypeBoundaryUsageTracker         SubjectType = "boundary_usage_tracker"
+	SubjectTypeWorkspaceBuilder             SubjectType = "workspace_builder"
+	SubjectTypeChatd                        SubjectType = "chatd"
 )
 
 const (
@@ -166,6 +171,25 @@ func (s Subject) SafeRoleNames() []RoleIdentifier {
 		return []RoleIdentifier{}
 	}
 	return s.Roles.Names()
+}
+
+// HasOrganizationMembership reports whether the subject has explicit
+// membership in organizationID through an org-scoped role. Site-wide roles
+// alone do not count as organization membership.
+func (s Subject) HasOrganizationMembership(organizationID uuid.UUID) (bool, error) {
+	roles, err := s.Roles.Expand()
+	if err != nil {
+		return false, xerrors.Errorf("expand user authorization roles: %w", err)
+	}
+
+	organizationIDString := organizationID.String()
+	for _, role := range roles {
+		if _, ok := role.ByOrgID[organizationIDString]; ok {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 type Authorizer interface {
@@ -291,6 +315,15 @@ func NewStrictCachingAuthorizer(registry prometheus.Registerer) Authorizer {
 	auth := NewAuthorizer(registry)
 	auth.strict = true
 	return Cacher(auth)
+}
+
+// NewStrictAuthorizer is for testing only. It skips the caching layer,
+// which is useful when every authorize call is unique (0% cache hit
+// rate) and the cache overhead dominates.
+func NewStrictAuthorizer(registry prometheus.Registerer) Authorizer {
+	auth := NewAuthorizer(registry)
+	auth.strict = true
+	return auth
 }
 
 func NewAuthorizer(registry prometheus.Registerer) *RegoAuthorizer {
@@ -670,6 +703,15 @@ func ConfigWithACL() regosql.ConvertConfig {
 // ConfigWithoutACL is the basic configuration for converting rego to SQL when
 // the object has no ACL fields.
 func ConfigWithoutACL() regosql.ConvertConfig {
+	return regosql.ConvertConfig{
+		VariableConverter: regosql.NoACLConverter(),
+	}
+}
+
+// ConfigChats is the configuration for converting rego to SQL when
+// the target table is "chats", which has no ACL
+// columns.
+func ConfigChats() regosql.ConvertConfig {
 	return regosql.ConvertConfig{
 		VariableConverter: regosql.NoACLConverter(),
 	}

@@ -8,6 +8,10 @@ import type { RBACAction, RBACResource } from "./typesGenerated";
 export const RBACResourceActions: Partial<
 	Record<RBACResource, Partial<Record<RBACAction, string>>>
 > = {
+	ai_seat: {
+		create: "record AI seat usage",
+		read: "read AI seat state",
+	},
 	aibridge_interception: {
 		create: "create aibridge interceptions & related records",
 		read: "read aibridge interceptions & related records",
@@ -35,6 +39,17 @@ export const RBACResourceActions: Partial<
 	audit_log: {
 		create: "create new audit log entries",
 		read: "read audit logs",
+	},
+	boundary_usage: {
+		delete: "delete boundary usage statistics",
+		read: "read boundary usage statistics",
+		update: "upsert boundary usage statistics",
+	},
+	chat: {
+		create: "create a new chat",
+		delete: "delete a chat",
+		read: "read chat messages and metadata",
+		update: "update chat title or settings",
 	},
 	connection_log: {
 		read: "read connection logs",
@@ -206,6 +221,7 @@ export const RBACResourceActions: Partial<
 		start: "allows starting a workspace",
 		stop: "allows stopping a workspace",
 		update: "edit workspace settings (scheduling, permissions, parameters)",
+		update_agent: "update an existing workspace agent",
 	},
 	workspace_agent_devcontainers: {
 		create: "create workspace agent devcontainers",
@@ -227,6 +243,7 @@ export const RBACResourceActions: Partial<
 		start: "allows starting a workspace",
 		stop: "allows stopping a workspace",
 		update: "edit workspace settings (scheduling, permissions, parameters)",
+		update_agent: "update an existing workspace agent",
 	},
 	workspace_proxy: {
 		create: "create a workspace proxy",

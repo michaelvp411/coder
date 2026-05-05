@@ -3,6 +3,7 @@
 .eslintcache
 .gitpod.yml
 .idea
+.run
 **/*.swp
 gotests.coverage
 gotests.xml
@@ -25,7 +26,7 @@ test-output/
 
 # Front-end ignore patterns.
 .next/
-site/build-storybook.log
+site/*-storybook.log
 site/coverage/
 site/storybook-static/
 site/test-results/*
@@ -37,6 +38,7 @@ site/.swc
 
 # Make target for updating generated/golden files (any dir).
 .gen
+/_gen/
 .gen-golden
 
 # Build
@@ -52,6 +54,7 @@ site/stats/
 *.tfstate.backup
 *.tfplan
 *.lock.hcl
+!provisioner/terraform/testdata/resources/.terraform.lock.hcl
 .terraform/
 !coderd/testdata/parameters/modules/.terraform/
 !provisioner/terraform/testdata/modules-source-caching/.terraform/
@@ -90,4 +93,16 @@ __debug_bin*
 
 **/.claude/settings.local.json
 
+# Local agent configuration
+AGENTS.local.md
+
 /.env
+
+# Ignore plans written by AI agents.
+PLAN.md
+
+# Ignore any dev licenses
+license.txt
+
+# Agent planning documents (local working files).
+docs/plans/

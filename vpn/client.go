@@ -2,23 +2,22 @@ package vpn
 
 import (
 	"context"
+	"crypto/tls"
 	"net/http"
 	"net/netip"
 	"net/url"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/tailscale/wireguard-go/tun"
 	"golang.org/x/xerrors"
-
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"
 	"tailscale.com/tailcfg"
 	"tailscale.com/wgengine/router"
 
-	"github.com/google/uuid"
-	"github.com/tailscale/wireguard-go/tun"
-
-	"cdr.dev/slog"
+	"cdr.dev/slog/v3"
 	"github.com/coder/coder/v2/codersdk"
 	"github.com/coder/coder/v2/codersdk/workspacesdk"
 	"github.com/coder/coder/v2/tailnet"
@@ -76,6 +75,8 @@ type Options struct {
 	TUNDevice        tun.Device
 	WireguardMonitor *netmon.Monitor
 	UpdateHandler    tailnet.UpdatesHandler
+	// DERPTLSConfig is an optional TLS config for DERP connections.
+	DERPTLSConfig *tls.Config
 }
 
 type derpMapRewriter struct {
@@ -160,6 +161,7 @@ func (*client) NewConn(initCtx context.Context, serverURL *url.URL, token string
 		Addresses:           []netip.Prefix{netip.PrefixFrom(ip, 128)},
 		DERPMap:             connInfo.DERPMap,
 		DERPHeader:          &clonedHeaders,
+		DERPTLSConfig:       options.DERPTLSConfig,
 		DERPForceWebSockets: connInfo.DERPForceWebSockets,
 		Logger:              options.Logger,
 		BlockEndpoints:      connInfo.DisableDirectConnections,

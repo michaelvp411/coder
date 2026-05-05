@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -71,6 +72,31 @@ func TestCommandHelp(t *testing.T) {
 		clitest.CommandHelpCase{
 			Name: "coder provisioner jobs list --output json",
 			Cmd:  []string{"provisioner", "jobs", "list", "--output", "json"},
+		},
+		// TODO (SasSwart): Remove these once the sync commands are promoted out of experimental.
+		clitest.CommandHelpCase{
+			Name: "coder exp sync --help",
+			Cmd:  []string{"exp", "sync", "--help"},
+		},
+		clitest.CommandHelpCase{
+			Name: "coder exp sync ping --help",
+			Cmd:  []string{"exp", "sync", "ping", "--help"},
+		},
+		clitest.CommandHelpCase{
+			Name: "coder exp sync start --help",
+			Cmd:  []string{"exp", "sync", "start", "--help"},
+		},
+		clitest.CommandHelpCase{
+			Name: "coder exp sync want --help",
+			Cmd:  []string{"exp", "sync", "want", "--help"},
+		},
+		clitest.CommandHelpCase{
+			Name: "coder exp sync complete --help",
+			Cmd:  []string{"exp", "sync", "complete", "--help"},
+		},
+		clitest.CommandHelpCase{
+			Name: "coder exp sync status --help",
+			Cmd:  []string{"exp", "sync", "status", "--help"},
 		},
 	))
 }
@@ -321,6 +347,68 @@ func TestCreateAgentClient_Azure(t *testing.T) {
 	require.IsType(t, &agentsdk.AzureSessionTokenExchanger{}, provider.TokenExchanger)
 }
 
+func TestCreateAgentClient_GoogleAgentName(t *testing.T) {
+	t.Parallel()
+
+	client := createAgentWithFlags(t,
+		"--auth", "google-instance-identity",
+		"--agent-url", "http://coder.fake",
+		"--agent-name", "google-agent")
+	requireInstanceIdentityAgentName(t, client, &agentsdk.GoogleSessionTokenExchanger{}, "google-agent")
+}
+
+func TestCreateAgentClient_AWSAgentName(t *testing.T) {
+	t.Parallel()
+
+	client := createAgentWithFlags(t,
+		"--auth", "aws-instance-identity",
+		"--agent-url", "http://coder.fake",
+		"--agent-name", "aws-agent")
+	requireInstanceIdentityAgentName(t, client, &agentsdk.AWSSessionTokenExchanger{}, "aws-agent")
+}
+
+func TestCreateAgentClient_AzureAgentName(t *testing.T) {
+	t.Parallel()
+
+	client := createAgentWithFlags(t,
+		"--auth", "azure-instance-identity",
+		"--agent-url", "http://coder.fake",
+		"--agent-name", "azure-agent")
+	requireInstanceIdentityAgentName(t, client, &agentsdk.AzureSessionTokenExchanger{}, "azure-agent")
+}
+
+func TestCreateAgentClient_GoogleAgentNameEnv(t *testing.T) {
+	t.Parallel()
+
+	r := &cli.RootCmd{}
+	var client *agentsdk.Client
+	subCmd := agentClientCommand(&client)
+	cmd, err := r.Command([]*serpent.Command{subCmd})
+	require.NoError(t, err)
+	inv, _ := clitest.NewWithCommand(t, cmd,
+		"agent-client",
+		"--auth", "google-instance-identity",
+		"--agent-url", "http://coder.fake")
+	inv.Environ.Set("CODER_AGENT_NAME", "env-agent")
+	err = inv.Run()
+	require.NoError(t, err)
+	require.NotNil(t, client)
+	requireInstanceIdentityAgentName(t, client, &agentsdk.GoogleSessionTokenExchanger{}, "env-agent")
+}
+
+func requireInstanceIdentityAgentName(t *testing.T, client *agentsdk.Client, expectedExchanger any, want string) {
+	t.Helper()
+
+	provider, ok := client.RefreshableSessionTokenProvider.(*agentsdk.InstanceIdentitySessionTokenProvider)
+	require.True(t, ok)
+	require.NotNil(t, provider.TokenExchanger)
+	require.IsType(t, expectedExchanger, provider.TokenExchanger)
+
+	agentNameField := reflect.ValueOf(provider.TokenExchanger).Elem().FieldByName("agentName")
+	require.True(t, agentNameField.IsValid())
+	require.Equal(t, want, agentNameField.String())
+}
+
 func createAgentWithFlags(t *testing.T, flags ...string) *agentsdk.Client {
 	t.Helper()
 	r := &cli.RootCmd{}
@@ -354,4 +442,60 @@ func agentClientCommand(clientRef **agentsdk.Client) *serpent.Command {
 	}
 	agentAuth.AttachOptions(cmd, false)
 	return cmd
+}
+
+func TestWrapTransportWithUserAgentHeader(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name                    string
+		cmdArgs                 []string
+		cmdEnv                  map[string]string
+		expectedUserAgentHeader string
+	}{
+		{
+			name:                    "top-level command",
+			cmdArgs:                 []string{"login"},
+			expectedUserAgentHeader: fmt.Sprintf("coder-cli/%s (%s/%s; coder login)", buildinfo.Version(), runtime.GOOS, runtime.GOARCH),
+		},
+		{
+			name:                    "nested commands",
+			cmdArgs:                 []string{"templates", "list"},
+			expectedUserAgentHeader: fmt.Sprintf("coder-cli/%s (%s/%s; coder templates list)", buildinfo.Version(), runtime.GOOS, runtime.GOARCH),
+		},
+		{
+			name:                    "does not include positional args, flags, or env",
+			cmdArgs:                 []string{"templates", "push", "my-template", "-d", "/path/to/template", "--yes", "--var", "myvar=myvalue"},
+			cmdEnv:                  map[string]string{"SECRET_KEY": "secret_value"},
+			expectedUserAgentHeader: fmt.Sprintf("coder-cli/%s (%s/%s; coder templates push)", buildinfo.Version(), runtime.GOOS, runtime.GOARCH),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ch := make(chan string, 1)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				select {
+				case ch <- r.Header.Get("User-Agent"):
+				default: // already sent
+				}
+			}))
+			t.Cleanup(srv.Close)
+
+			args := append([]string{}, tc.cmdArgs...)
+			inv, _ := clitest.New(t, args...)
+			inv.Environ.Set("CODER_URL", srv.URL)
+			for k, v := range tc.cmdEnv {
+				inv.Environ.Set(k, v)
+			}
+
+			ctx := testutil.Context(t, testutil.WaitShort)
+			_ = inv.WithContext(ctx).Run() // Ignore error as we only care about headers.
+
+			actual := testutil.RequireReceive(ctx, t, ch)
+			require.Equal(t, tc.expectedUserAgentHeader, actual, "User-Agent should match expected format exactly")
+		})
+	}
 }

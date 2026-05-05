@@ -12,9 +12,11 @@ import (
 	"github.com/coder/coder/v2/coderd/audit"
 	"github.com/coder/coder/v2/coderd/database"
 	"github.com/coder/coder/v2/coderd/database/db2sdk"
+	"github.com/coder/coder/v2/coderd/database/dbauthz"
 	"github.com/coder/coder/v2/coderd/database/dbtime"
 	"github.com/coder/coder/v2/coderd/httpapi"
 	"github.com/coder/coder/v2/coderd/httpmw"
+	"github.com/coder/coder/v2/coderd/rbac/rolestore"
 	"github.com/coder/coder/v2/codersdk"
 )
 
@@ -27,7 +29,7 @@ import (
 // @Param organization path string true "Organization ID or name"
 // @Param request body codersdk.UpdateOrganizationRequest true "Patch organization request"
 // @Success 200 {object} codersdk.Organization
-// @Router /organizations/{organization} [patch]
+// @Router /api/v2/organizations/{organization} [patch]
 func (api *API) patchOrganization(rw http.ResponseWriter, r *http.Request) {
 	var (
 		ctx               = r.Context()
@@ -127,7 +129,7 @@ func (api *API) patchOrganization(rw http.ResponseWriter, r *http.Request) {
 // @Tags Organizations
 // @Param organization path string true "Organization ID or name"
 // @Success 200 {object} codersdk.Response
-// @Router /organizations/{organization} [delete]
+// @Router /api/v2/organizations/{organization} [delete]
 func (api *API) deleteOrganization(rw http.ResponseWriter, r *http.Request) {
 	var (
 		ctx               = r.Context()
@@ -214,7 +216,7 @@ func (api *API) deleteOrganization(rw http.ResponseWriter, r *http.Request) {
 // @Tags Organizations
 // @Param request body codersdk.CreateOrganizationRequest true "Create organization request"
 // @Success 201 {object} codersdk.Organization
-// @Router /organizations [post]
+// @Router /api/v2/organizations [post]
 func (api *API) postOrganizations(rw http.ResponseWriter, r *http.Request) {
 	var (
 		// organizationID is required before the audit log entry is created.
@@ -265,6 +267,14 @@ func (api *API) postOrganizations(rw http.ResponseWriter, r *http.Request) {
 
 	var organization database.Organization
 	err = api.Database.InTx(func(tx database.Store) error {
+		// Serialize creation and reconciliation of the org-member
+		// system role across coderd instances (e.g. during rolling
+		// restarts).
+		err := tx.AcquireLock(ctx, database.LockIDReconcileSystemRoles)
+		if err != nil {
+			return xerrors.Errorf("acquire system roles reconciliation lock: %w", err)
+		}
+
 		if req.DisplayName == "" {
 			req.DisplayName = req.Name
 		}
@@ -281,6 +291,23 @@ func (api *API) postOrganizations(rw http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return xerrors.Errorf("create organization: %w", err)
 		}
+
+		// Populate the placeholder system role(s) that the DB trigger
+		// created for us.
+		//nolint:gocritic // ReconcileOrgMemberRole needs the system:update
+		// permission that user doesn't have.
+		sysCtx := dbauthz.AsSystemRestricted(ctx)
+		for roleName := range rolestore.SystemRoleNames {
+			_, _, err = rolestore.ReconcileSystemRole(sysCtx, tx, database.CustomRole{
+				Name:           roleName,
+				OrganizationID: uuid.NullUUID{UUID: organizationID, Valid: true},
+			}, organization)
+			if err != nil {
+				return xerrors.Errorf("reconcile %s role for organization %s: %w",
+					roleName, organizationID, err)
+			}
+		}
+
 		_, err = tx.InsertOrganizationMember(ctx, database.InsertOrganizationMemberParams{
 			OrganizationID: organization.ID,
 			UserID:         apiKey.UserID,

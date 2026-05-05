@@ -5,7 +5,7 @@ set -euo pipefail
 # While you can install it using npm, we have it in our devDependencies
 # in ${PROJECT_ROOT}/package.json.
 PROJECT_ROOT="$(git rev-parse --show-toplevel)"
-if ! pnpm list | grep quicktype &>/dev/null; then
+if ! pnpm -C "${PROJECT_ROOT}" list | grep quicktype &>/dev/null; then
 	echo "quicktype is required to run this script!"
 	echo "Ensure that it is present in the devDependencies of ${PROJECT_ROOT}/package.json and then run pnpm install."
 	exit 1
@@ -40,7 +40,7 @@ if [[ " $* " == *" --quiet "* ]] || [[ ${DCSPEC_QUIET:-false} == "true" ]]; then
 	exec 2>"${TMPDIR}/stderr.log"
 fi
 
-if ! pnpm exec quicktype \
+if ! pnpm -C "${PROJECT_ROOT}" exec quicktype \
 	--src-lang schema \
 	--lang go \
 	--top-level "DevContainer" \
@@ -61,7 +61,7 @@ fi
 exec 3>&-
 
 # Format the generated code.
-go run mvdan.cc/gofumpt@v0.8.0 -w -l "${TMPDIR}/${DEST_FILENAME}"
+"${PROJECT_ROOT}/scripts/format_go_file.sh" "${TMPDIR}/${DEST_FILENAME}"
 
 # Add a header so that Go recognizes this as a generated file.
 if grep -q -- "\[-i extension\]" < <(sed -h 2>&1); then

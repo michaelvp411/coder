@@ -3,11 +3,9 @@ package rbac
 import (
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/google/uuid"
-
 	"golang.org/x/xerrors"
 
 	"github.com/coder/coder/v2/coderd/rbac/policy"
@@ -18,6 +16,7 @@ type WorkspaceAgentScopeParams struct {
 	OwnerID       uuid.UUID
 	TemplateID    uuid.UUID
 	VersionID     uuid.UUID
+	TaskID        uuid.NullUUID
 	BlockUserData bool
 }
 
@@ -42,6 +41,15 @@ func WorkspaceAgentScope(params WorkspaceAgentScopeParams) Scope {
 		panic("failed to expand scope, this should never happen")
 	}
 
+	// Include task in the allow list if the workspace has an associated task.
+	var extraAllowList []AllowListElement
+	if params.TaskID.Valid {
+		extraAllowList = append(extraAllowList, AllowListElement{
+			Type: ResourceTask.Type,
+			ID:   params.TaskID.UUID.String(),
+		})
+	}
+
 	return Scope{
 		// TODO: We want to limit the role too to be extra safe.
 		// Even though the allowlist blocks anything else, it is still good
@@ -52,12 +60,12 @@ func WorkspaceAgentScope(params WorkspaceAgentScopeParams) Scope {
 		// Limit the agent to only be able to access the singular workspace and
 		// the template/version it was created from. Add additional resources here
 		// as needed, but do not add more workspace or template resource ids.
-		AllowIDList: []AllowListElement{
+		AllowIDList: append([]AllowListElement{
 			{Type: ResourceWorkspace.Type, ID: params.WorkspaceID.String()},
 			{Type: ResourceTemplate.Type, ID: params.TemplateID.String()},
 			{Type: ResourceTemplate.Type, ID: params.VersionID.String()},
 			{Type: ResourceUser.Type, ID: params.OwnerID.String()},
-		},
+		}, extraAllowList...),
 	}
 }
 
@@ -127,16 +135,25 @@ func BuiltinScopeNames() []ScopeName {
 var compositePerms = map[ScopeName]map[string][]policy.Action{
 	"coder:workspaces.create": {
 		ResourceTemplate.Type:  {policy.ActionRead, policy.ActionUse},
-		ResourceWorkspace.Type: {policy.ActionCreate, policy.ActionUpdate, policy.ActionRead},
+		ResourceWorkspace.Type: {policy.ActionWorkspaceStop, policy.ActionWorkspaceStart, policy.ActionCreate, policy.ActionUpdate, policy.ActionRead},
+		// When creating a workspace, users need to be able to read the org member the
+		// workspace will be owned by. Even if that owner is "yourself".
+		ResourceOrganizationMember.Type: {policy.ActionRead},
 	},
 	"coder:workspaces.operate": {
-		ResourceWorkspace.Type: {policy.ActionRead, policy.ActionUpdate},
+		ResourceTemplate.Type:           {policy.ActionRead},
+		ResourceWorkspace.Type:          {policy.ActionWorkspaceStop, policy.ActionWorkspaceStart, policy.ActionRead, policy.ActionUpdate},
+		ResourceOrganizationMember.Type: {policy.ActionRead},
 	},
 	"coder:workspaces.delete": {
-		ResourceWorkspace.Type: {policy.ActionRead, policy.ActionDelete},
+		ResourceTemplate.Type:           {policy.ActionRead, policy.ActionUse},
+		ResourceWorkspace.Type:          {policy.ActionRead, policy.ActionDelete},
+		ResourceOrganizationMember.Type: {policy.ActionRead},
 	},
 	"coder:workspaces.access": {
-		ResourceWorkspace.Type: {policy.ActionRead, policy.ActionSSH, policy.ActionApplicationConnect},
+		ResourceTemplate.Type:           {policy.ActionRead},
+		ResourceOrganizationMember.Type: {policy.ActionRead},
+		ResourceWorkspace.Type:          {policy.ActionRead, policy.ActionSSH, policy.ActionApplicationConnect},
 	},
 	"coder:templates.build": {
 		ResourceTemplate.Type: {policy.ActionRead},
@@ -167,7 +184,7 @@ func CompositeScopeNames() []string {
 	for k := range compositePerms {
 		out = append(out, string(k))
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 

@@ -14,6 +14,7 @@ USAGE:
        $ coder templates init
 
 SUBCOMMANDS:
+    agents            Interactive terminal UI for AI agents.
     autoupdate        Toggle auto-update policy for a workspace
     completion        Install or update shell completion scripts for the
                       detected or chosen shell.
@@ -28,6 +29,7 @@ SUBCOMMANDS:
     list              List workspaces
     login             Authenticate with Coder deployment
     logout            Unauthenticate your local session
+    logs              View logs for a workspace
     netcheck          Print network debug information for DERP and STUN
     notifications     Manage Coder notifications
     open              Open a workspace
@@ -42,6 +44,7 @@ SUBCOMMANDS:
                       password
     restart           Restart a workspace
     schedule          Schedule automated start and stop times for workspaces
+    secret            Manage secrets
     server            Start a Coder server
     show              Display details of a workspace's resources and agents
     speedtest         Run upload and download tests from your machine to a
@@ -53,6 +56,7 @@ SUBCOMMANDS:
     stop              Stop a workspace
     support           Commands for troubleshooting issues with a Coder
                       deployment.
+    task              Manage tasks
     templates         Manage templates
     tokens            Manage personal access tokens
     unfavorite        Remove a workspace from your favorites
@@ -66,6 +70,17 @@ SUBCOMMANDS:
 GLOBAL OPTIONS: 
 Global options are applied to all commands. They can be set using environment
 variables or flags.
+
+      --client-tls-ca-file string, $CODER_CLIENT_TLS_CA_FILE
+          Path to a CA certificate file to trust for API and DERP connections.
+
+      --client-tls-cert-file string, $CODER_CLIENT_TLS_CERT_FILE
+          Path to a client certificate file for mTLS authentication with API and
+          DERP. Requires --client-tls-key-file.
+
+      --client-tls-key-file string, $CODER_CLIENT_TLS_KEY_FILE
+          Path to a client private key file for mTLS authentication with API and
+          DERP. Requires --client-tls-cert-file.
 
       --debug-options bool
           Print all options, how they're set, then exit.
@@ -107,6 +122,13 @@ variables or flags.
 
       --url url, $CODER_URL
           URL to a deployment.
+
+      --use-keyring bool, $CODER_USE_KEYRING (default: true)
+          Store and retrieve session tokens using the operating system keyring.
+          This flag is ignored and file-based storage is used when
+          --global-config is set or keyring usage is not supported on the
+          current platform. Set to false to force file-based storage on
+          supported platforms.
 
   -v, --verbose bool, $CODER_VERBOSE
           Enable verbose output.

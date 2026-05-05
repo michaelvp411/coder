@@ -6,7 +6,7 @@
 
 ```shell
 # Example request using curl
-curl -X GET http://coder-server:8080/api/v2/.well-known/oauth-authorization-server \
+curl -X GET http://coder-server:8080/.well-known/oauth-authorization-server \
   -H 'Accept: application/json'
 ```
 
@@ -20,22 +20,23 @@ curl -X GET http://coder-server:8080/api/v2/.well-known/oauth-authorization-serv
 {
   "authorization_endpoint": "string",
   "code_challenge_methods_supported": [
-    "string"
+    "S256"
   ],
   "grant_types_supported": [
-    "string"
+    "authorization_code"
   ],
   "issuer": "string",
   "registration_endpoint": "string",
   "response_types_supported": [
-    "string"
+    "code"
   ],
+  "revocation_endpoint": "string",
   "scopes_supported": [
     "string"
   ],
   "token_endpoint": "string",
   "token_endpoint_auth_methods_supported": [
-    "string"
+    "client_secret_basic"
   ]
 }
 ```
@@ -52,7 +53,7 @@ curl -X GET http://coder-server:8080/api/v2/.well-known/oauth-authorization-serv
 
 ```shell
 # Example request using curl
-curl -X GET http://coder-server:8080/api/v2/.well-known/oauth-protected-resource \
+curl -X GET http://coder-server:8080/.well-known/oauth-protected-resource \
   -H 'Accept: application/json'
 ```
 
@@ -94,7 +95,7 @@ curl -X GET http://coder-server:8080/api/v2/appearance \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /appearance`
+`GET /api/v2/appearance`
 
 ### Example responses
 
@@ -148,7 +149,7 @@ curl -X PUT http://coder-server:8080/api/v2/appearance \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`PUT /appearance`
+`PUT /api/v2/appearance`
 
 > Body parameter
 
@@ -219,7 +220,7 @@ curl -X GET http://coder-server:8080/api/v2/connectionlog?limit=0 \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /connectionlog`
+`GET /api/v2/connectionlog`
 
 ### Parameters
 
@@ -261,7 +262,9 @@ curl -X GET http://coder-server:8080/api/v2/connectionlog?limit=0 \
           "avatar_url": "http://example.com",
           "created_at": "2019-08-24T14:15:22Z",
           "email": "user@example.com",
+          "has_ai_seat": true,
           "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+          "is_service_account": true,
           "last_seen_at": "2019-08-24T14:15:22Z",
           "login_type": "",
           "name": "string",
@@ -288,7 +291,8 @@ curl -X GET http://coder-server:8080/api/v2/connectionlog?limit=0 \
       "workspace_owner_username": "string"
     }
   ],
-  "count": 0
+  "count": 0,
+  "count_cap": 0
 }
 ```
 
@@ -311,7 +315,7 @@ curl -X GET http://coder-server:8080/api/v2/entitlements \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /entitlements`
+`GET /api/v2/entitlements`
 
 ### Example responses
 
@@ -328,7 +332,6 @@ curl -X GET http://coder-server:8080/api/v2/entitlements \
       "enabled": true,
       "entitlement": "entitled",
       "limit": 0,
-      "soft_limit": 0,
       "usage_period": {
         "end": "2019-08-24T14:15:22Z",
         "issued_at": "2019-08-24T14:15:22Z",
@@ -340,7 +343,6 @@ curl -X GET http://coder-server:8080/api/v2/entitlements \
       "enabled": true,
       "entitlement": "entitled",
       "limit": 0,
-      "soft_limit": 0,
       "usage_period": {
         "end": "2019-08-24T14:15:22Z",
         "issued_at": "2019-08-24T14:15:22Z",
@@ -377,7 +379,7 @@ curl -X GET http://coder-server:8080/api/v2/groups?organization=string&has_membe
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /groups`
+`GET /api/v2/groups`
 
 ### Parameters
 
@@ -403,6 +405,7 @@ curl -X GET http://coder-server:8080/api/v2/groups?organization=string&has_membe
         "created_at": "2019-08-24T14:15:22Z",
         "email": "user@example.com",
         "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+        "is_service_account": true,
         "last_seen_at": "2019-08-24T14:15:22Z",
         "login_type": "",
         "name": "string",
@@ -444,6 +447,7 @@ Status Code **200**
 | `»» created_at`               | string(date-time)                                      | true     |              |                                                                                                                                                                       |
 | `»» email`                    | string(email)                                          | true     |              |                                                                                                                                                                       |
 | `»» id`                       | string(uuid)                                           | true     |              |                                                                                                                                                                       |
+| `»» is_service_account`       | boolean                                                | false    |              |                                                                                                                                                                       |
 | `»» last_seen_at`             | string(date-time)                                      | false    |              |                                                                                                                                                                       |
 | `»» login_type`               | [codersdk.LoginType](schemas.md#codersdklogintype)     | false    |              |                                                                                                                                                                       |
 | `»» name`                     | string                                                 | false    |              |                                                                                                                                                                       |
@@ -461,18 +465,11 @@ Status Code **200**
 
 #### Enumerated Values
 
-| Property     | Value       |
-|--------------|-------------|
-| `login_type` | ``          |
-| `login_type` | `password`  |
-| `login_type` | `github`    |
-| `login_type` | `oidc`      |
-| `login_type` | `token`     |
-| `login_type` | `none`      |
-| `status`     | `active`    |
-| `status`     | `suspended` |
-| `source`     | `user`      |
-| `source`     | `oidc`      |
+| Property     | Value(s)                                          |
+|--------------|---------------------------------------------------|
+| `login_type` | ``, `github`, `none`, `oidc`, `password`, `token` |
+| `status`     | `active`, `suspended`                             |
+| `source`     | `oidc`, `user`                                    |
 
 To perform this operation, you must be authenticated. [Learn more](authentication.md).
 
@@ -487,13 +484,14 @@ curl -X GET http://coder-server:8080/api/v2/groups/{group} \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /groups/{group}`
+`GET /api/v2/groups/{group}`
 
 ### Parameters
 
-| Name    | In   | Type   | Required | Description |
-|---------|------|--------|----------|-------------|
-| `group` | path | string | true     | Group id    |
+| Name              | In    | Type    | Required | Description                       |
+|-------------------|-------|---------|----------|-----------------------------------|
+| `group`           | path  | string  | true     | Group id                          |
+| `exclude_members` | query | boolean | false    | Exclude members from the response |
 
 ### Example responses
 
@@ -510,6 +508,7 @@ curl -X GET http://coder-server:8080/api/v2/groups/{group} \
       "created_at": "2019-08-24T14:15:22Z",
       "email": "user@example.com",
       "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "is_service_account": true,
       "last_seen_at": "2019-08-24T14:15:22Z",
       "login_type": "",
       "name": "string",
@@ -548,7 +547,7 @@ curl -X DELETE http://coder-server:8080/api/v2/groups/{group} \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`DELETE /groups/{group}`
+`DELETE /api/v2/groups/{group}`
 
 ### Parameters
 
@@ -571,6 +570,7 @@ curl -X DELETE http://coder-server:8080/api/v2/groups/{group} \
       "created_at": "2019-08-24T14:15:22Z",
       "email": "user@example.com",
       "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "is_service_account": true,
       "last_seen_at": "2019-08-24T14:15:22Z",
       "login_type": "",
       "name": "string",
@@ -610,7 +610,7 @@ curl -X PATCH http://coder-server:8080/api/v2/groups/{group} \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`PATCH /groups/{group}`
+`PATCH /api/v2/groups/{group}`
 
 > Body parameter
 
@@ -651,6 +651,7 @@ curl -X PATCH http://coder-server:8080/api/v2/groups/{group} \
       "created_at": "2019-08-24T14:15:22Z",
       "email": "user@example.com",
       "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "is_service_account": true,
       "last_seen_at": "2019-08-24T14:15:22Z",
       "login_type": "",
       "name": "string",
@@ -678,6 +679,63 @@ curl -X PATCH http://coder-server:8080/api/v2/groups/{group} \
 
 To perform this operation, you must be authenticated. [Learn more](authentication.md).
 
+## Get group members by group ID
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X GET http://coder-server:8080/api/v2/groups/{group}/members \
+  -H 'Accept: application/json' \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`GET /api/v2/groups/{group}/members`
+
+### Parameters
+
+| Name       | In    | Type         | Required | Description         |
+|------------|-------|--------------|----------|---------------------|
+| `group`    | path  | string       | true     | Group id            |
+| `q`        | query | string       | false    | Member search query |
+| `after_id` | query | string(uuid) | false    | After ID            |
+| `limit`    | query | integer      | false    | Page limit          |
+| `offset`   | query | integer      | false    | Page offset         |
+
+### Example responses
+
+> 200 Response
+
+```json
+{
+  "count": 0,
+  "users": [
+    {
+      "avatar_url": "http://example.com",
+      "created_at": "2019-08-24T14:15:22Z",
+      "email": "user@example.com",
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "is_service_account": true,
+      "last_seen_at": "2019-08-24T14:15:22Z",
+      "login_type": "",
+      "name": "string",
+      "status": "active",
+      "theme_preference": "string",
+      "updated_at": "2019-08-24T14:15:22Z",
+      "username": "string"
+    }
+  ]
+}
+```
+
+### Responses
+
+| Status | Meaning                                                 | Description | Schema                                                                   |
+|--------|---------------------------------------------------------|-------------|--------------------------------------------------------------------------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.GroupMembersResponse](schemas.md#codersdkgroupmembersresponse) |
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
 ## Get licenses
 
 ### Code samples
@@ -689,7 +747,7 @@ curl -X GET http://coder-server:8080/api/v2/licenses \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /licenses`
+`GET /api/v2/licenses`
 
 ### Example responses
 
@@ -726,6 +784,93 @@ Status Code **200**
 
 To perform this operation, you must be authenticated. [Learn more](authentication.md).
 
+## Add new license
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X POST http://coder-server:8080/api/v2/licenses \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`POST /api/v2/licenses`
+
+> Body parameter
+
+```json
+{
+  "license": "string"
+}
+```
+
+### Parameters
+
+| Name   | In   | Type                                                               | Required | Description         |
+|--------|------|--------------------------------------------------------------------|----------|---------------------|
+| `body` | body | [codersdk.AddLicenseRequest](schemas.md#codersdkaddlicenserequest) | true     | Add license request |
+
+### Example responses
+
+> 201 Response
+
+```json
+{
+  "claims": {},
+  "id": 0,
+  "uploaded_at": "2019-08-24T14:15:22Z",
+  "uuid": "095be615-a8ad-4c33-8e9c-c7612fbf6c9f"
+}
+```
+
+### Responses
+
+| Status | Meaning                                                      | Description | Schema                                         |
+|--------|--------------------------------------------------------------|-------------|------------------------------------------------|
+| 201    | [Created](https://tools.ietf.org/html/rfc7231#section-6.3.2) | Created     | [codersdk.License](schemas.md#codersdklicense) |
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
+## Update license entitlements
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X POST http://coder-server:8080/api/v2/licenses/refresh-entitlements \
+  -H 'Accept: application/json' \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`POST /api/v2/licenses/refresh-entitlements`
+
+### Example responses
+
+> 201 Response
+
+```json
+{
+  "detail": "string",
+  "message": "string",
+  "validations": [
+    {
+      "detail": "string",
+      "field": "string"
+    }
+  ]
+}
+```
+
+### Responses
+
+| Status | Meaning                                                      | Description | Schema                                           |
+|--------|--------------------------------------------------------------|-------------|--------------------------------------------------|
+| 201    | [Created](https://tools.ietf.org/html/rfc7231#section-6.3.2) | Created     | [codersdk.Response](schemas.md#codersdkresponse) |
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
 ## Delete license
 
 ### Code samples
@@ -736,7 +881,7 @@ curl -X DELETE http://coder-server:8080/api/v2/licenses/{id} \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`DELETE /licenses/{id}`
+`DELETE /api/v2/licenses/{id}`
 
 ### Parameters
 
@@ -762,7 +907,7 @@ curl -X PUT http://coder-server:8080/api/v2/notifications/templates/{notificatio
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`PUT /notifications/templates/{notification_template}/method`
+`PUT /api/v2/notifications/templates/{notification_template}/method`
 
 ### Parameters
 
@@ -790,7 +935,7 @@ curl -X GET http://coder-server:8080/api/v2/oauth2-provider/apps \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /oauth2-provider/apps`
+`GET /api/v2/oauth2-provider/apps`
 
 ### Parameters
 
@@ -856,7 +1001,7 @@ curl -X POST http://coder-server:8080/api/v2/oauth2-provider/apps \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`POST /oauth2-provider/apps`
+`POST /api/v2/oauth2-provider/apps`
 
 > Body parameter
 
@@ -912,7 +1057,7 @@ curl -X GET http://coder-server:8080/api/v2/oauth2-provider/apps/{app} \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /oauth2-provider/apps/{app}`
+`GET /api/v2/oauth2-provider/apps/{app}`
 
 ### Parameters
 
@@ -959,7 +1104,7 @@ curl -X PUT http://coder-server:8080/api/v2/oauth2-provider/apps/{app} \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`PUT /oauth2-provider/apps/{app}`
+`PUT /api/v2/oauth2-provider/apps/{app}`
 
 > Body parameter
 
@@ -1015,7 +1160,7 @@ curl -X DELETE http://coder-server:8080/api/v2/oauth2-provider/apps/{app} \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`DELETE /oauth2-provider/apps/{app}`
+`DELETE /api/v2/oauth2-provider/apps/{app}`
 
 ### Parameters
 
@@ -1042,7 +1187,7 @@ curl -X GET http://coder-server:8080/api/v2/oauth2-provider/apps/{app}/secrets \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /oauth2-provider/apps/{app}/secrets`
+`GET /api/v2/oauth2-provider/apps/{app}/secrets`
 
 ### Parameters
 
@@ -1094,7 +1239,7 @@ curl -X POST http://coder-server:8080/api/v2/oauth2-provider/apps/{app}/secrets 
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`POST /oauth2-provider/apps/{app}/secrets`
+`POST /api/v2/oauth2-provider/apps/{app}/secrets`
 
 ### Parameters
 
@@ -1143,7 +1288,7 @@ curl -X DELETE http://coder-server:8080/api/v2/oauth2-provider/apps/{app}/secret
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`DELETE /oauth2-provider/apps/{app}/secrets/{secretID}`
+`DELETE /api/v2/oauth2-provider/apps/{app}/secrets/{secretID}`
 
 ### Parameters
 
@@ -1151,478 +1296,6 @@ curl -X DELETE http://coder-server:8080/api/v2/oauth2-provider/apps/{app}/secret
 |------------|------|--------|----------|-------------|
 | `app`      | path | string | true     | App ID      |
 | `secretID` | path | string | true     | Secret ID   |
-
-### Responses
-
-| Status | Meaning                                                         | Description | Schema |
-|--------|-----------------------------------------------------------------|-------------|--------|
-| 204    | [No Content](https://tools.ietf.org/html/rfc7231#section-6.3.5) | No Content  |        |
-
-To perform this operation, you must be authenticated. [Learn more](authentication.md).
-
-## OAuth2 authorization request (GET - show authorization page)
-
-### Code samples
-
-```shell
-# Example request using curl
-curl -X GET http://coder-server:8080/api/v2/oauth2/authorize?client_id=string&state=string&response_type=code \
-  -H 'Coder-Session-Token: API_KEY'
-```
-
-`GET /oauth2/authorize`
-
-### Parameters
-
-| Name            | In    | Type   | Required | Description                       |
-|-----------------|-------|--------|----------|-----------------------------------|
-| `client_id`     | query | string | true     | Client ID                         |
-| `state`         | query | string | true     | A random unguessable string       |
-| `response_type` | query | string | true     | Response type                     |
-| `redirect_uri`  | query | string | false    | Redirect here after authorization |
-| `scope`         | query | string | false    | Token scopes (currently ignored)  |
-
-#### Enumerated Values
-
-| Parameter       | Value  |
-|-----------------|--------|
-| `response_type` | `code` |
-
-### Responses
-
-| Status | Meaning                                                 | Description                     | Schema |
-|--------|---------------------------------------------------------|---------------------------------|--------|
-| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | Returns HTML authorization page |        |
-
-To perform this operation, you must be authenticated. [Learn more](authentication.md).
-
-## OAuth2 authorization request (POST - process authorization)
-
-### Code samples
-
-```shell
-# Example request using curl
-curl -X POST http://coder-server:8080/api/v2/oauth2/authorize?client_id=string&state=string&response_type=code \
-  -H 'Coder-Session-Token: API_KEY'
-```
-
-`POST /oauth2/authorize`
-
-### Parameters
-
-| Name            | In    | Type   | Required | Description                       |
-|-----------------|-------|--------|----------|-----------------------------------|
-| `client_id`     | query | string | true     | Client ID                         |
-| `state`         | query | string | true     | A random unguessable string       |
-| `response_type` | query | string | true     | Response type                     |
-| `redirect_uri`  | query | string | false    | Redirect here after authorization |
-| `scope`         | query | string | false    | Token scopes (currently ignored)  |
-
-#### Enumerated Values
-
-| Parameter       | Value  |
-|-----------------|--------|
-| `response_type` | `code` |
-
-### Responses
-
-| Status | Meaning                                                    | Description                              | Schema |
-|--------|------------------------------------------------------------|------------------------------------------|--------|
-| 302    | [Found](https://tools.ietf.org/html/rfc7231#section-6.4.3) | Returns redirect with authorization code |        |
-
-To perform this operation, you must be authenticated. [Learn more](authentication.md).
-
-## Get OAuth2 client configuration (RFC 7592)
-
-### Code samples
-
-```shell
-# Example request using curl
-curl -X GET http://coder-server:8080/api/v2/oauth2/clients/{client_id} \
-  -H 'Accept: application/json'
-```
-
-`GET /oauth2/clients/{client_id}`
-
-### Parameters
-
-| Name        | In   | Type   | Required | Description |
-|-------------|------|--------|----------|-------------|
-| `client_id` | path | string | true     | Client ID   |
-
-### Example responses
-
-> 200 Response
-
-```json
-{
-  "client_id": "string",
-  "client_id_issued_at": 0,
-  "client_name": "string",
-  "client_secret_expires_at": 0,
-  "client_uri": "string",
-  "contacts": [
-    "string"
-  ],
-  "grant_types": [
-    "string"
-  ],
-  "jwks": {},
-  "jwks_uri": "string",
-  "logo_uri": "string",
-  "policy_uri": "string",
-  "redirect_uris": [
-    "string"
-  ],
-  "registration_access_token": [
-    0
-  ],
-  "registration_client_uri": "string",
-  "response_types": [
-    "string"
-  ],
-  "scope": "string",
-  "software_id": "string",
-  "software_version": "string",
-  "token_endpoint_auth_method": "string",
-  "tos_uri": "string"
-}
-```
-
-### Responses
-
-| Status | Meaning                                                 | Description | Schema                                                                             |
-|--------|---------------------------------------------------------|-------------|------------------------------------------------------------------------------------|
-| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.OAuth2ClientConfiguration](schemas.md#codersdkoauth2clientconfiguration) |
-
-## Update OAuth2 client configuration (RFC 7592)
-
-### Code samples
-
-```shell
-# Example request using curl
-curl -X PUT http://coder-server:8080/api/v2/oauth2/clients/{client_id} \
-  -H 'Content-Type: application/json' \
-  -H 'Accept: application/json'
-```
-
-`PUT /oauth2/clients/{client_id}`
-
-> Body parameter
-
-```json
-{
-  "client_name": "string",
-  "client_uri": "string",
-  "contacts": [
-    "string"
-  ],
-  "grant_types": [
-    "string"
-  ],
-  "jwks": {},
-  "jwks_uri": "string",
-  "logo_uri": "string",
-  "policy_uri": "string",
-  "redirect_uris": [
-    "string"
-  ],
-  "response_types": [
-    "string"
-  ],
-  "scope": "string",
-  "software_id": "string",
-  "software_statement": "string",
-  "software_version": "string",
-  "token_endpoint_auth_method": "string",
-  "tos_uri": "string"
-}
-```
-
-### Parameters
-
-| Name        | In   | Type                                                                                           | Required | Description           |
-|-------------|------|------------------------------------------------------------------------------------------------|----------|-----------------------|
-| `client_id` | path | string                                                                                         | true     | Client ID             |
-| `body`      | body | [codersdk.OAuth2ClientRegistrationRequest](schemas.md#codersdkoauth2clientregistrationrequest) | true     | Client update request |
-
-### Example responses
-
-> 200 Response
-
-```json
-{
-  "client_id": "string",
-  "client_id_issued_at": 0,
-  "client_name": "string",
-  "client_secret_expires_at": 0,
-  "client_uri": "string",
-  "contacts": [
-    "string"
-  ],
-  "grant_types": [
-    "string"
-  ],
-  "jwks": {},
-  "jwks_uri": "string",
-  "logo_uri": "string",
-  "policy_uri": "string",
-  "redirect_uris": [
-    "string"
-  ],
-  "registration_access_token": [
-    0
-  ],
-  "registration_client_uri": "string",
-  "response_types": [
-    "string"
-  ],
-  "scope": "string",
-  "software_id": "string",
-  "software_version": "string",
-  "token_endpoint_auth_method": "string",
-  "tos_uri": "string"
-}
-```
-
-### Responses
-
-| Status | Meaning                                                 | Description | Schema                                                                             |
-|--------|---------------------------------------------------------|-------------|------------------------------------------------------------------------------------|
-| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.OAuth2ClientConfiguration](schemas.md#codersdkoauth2clientconfiguration) |
-
-## Delete OAuth2 client registration (RFC 7592)
-
-### Code samples
-
-```shell
-# Example request using curl
-curl -X DELETE http://coder-server:8080/api/v2/oauth2/clients/{client_id}
-
-```
-
-`DELETE /oauth2/clients/{client_id}`
-
-### Parameters
-
-| Name        | In   | Type   | Required | Description |
-|-------------|------|--------|----------|-------------|
-| `client_id` | path | string | true     | Client ID   |
-
-### Responses
-
-| Status | Meaning                                                         | Description | Schema |
-|--------|-----------------------------------------------------------------|-------------|--------|
-| 204    | [No Content](https://tools.ietf.org/html/rfc7231#section-6.3.5) | No Content  |        |
-
-## OAuth2 dynamic client registration (RFC 7591)
-
-### Code samples
-
-```shell
-# Example request using curl
-curl -X POST http://coder-server:8080/api/v2/oauth2/register \
-  -H 'Content-Type: application/json' \
-  -H 'Accept: application/json'
-```
-
-`POST /oauth2/register`
-
-> Body parameter
-
-```json
-{
-  "client_name": "string",
-  "client_uri": "string",
-  "contacts": [
-    "string"
-  ],
-  "grant_types": [
-    "string"
-  ],
-  "jwks": {},
-  "jwks_uri": "string",
-  "logo_uri": "string",
-  "policy_uri": "string",
-  "redirect_uris": [
-    "string"
-  ],
-  "response_types": [
-    "string"
-  ],
-  "scope": "string",
-  "software_id": "string",
-  "software_statement": "string",
-  "software_version": "string",
-  "token_endpoint_auth_method": "string",
-  "tos_uri": "string"
-}
-```
-
-### Parameters
-
-| Name   | In   | Type                                                                                           | Required | Description                 |
-|--------|------|------------------------------------------------------------------------------------------------|----------|-----------------------------|
-| `body` | body | [codersdk.OAuth2ClientRegistrationRequest](schemas.md#codersdkoauth2clientregistrationrequest) | true     | Client registration request |
-
-### Example responses
-
-> 201 Response
-
-```json
-{
-  "client_id": "string",
-  "client_id_issued_at": 0,
-  "client_name": "string",
-  "client_secret": "string",
-  "client_secret_expires_at": 0,
-  "client_uri": "string",
-  "contacts": [
-    "string"
-  ],
-  "grant_types": [
-    "string"
-  ],
-  "jwks": {},
-  "jwks_uri": "string",
-  "logo_uri": "string",
-  "policy_uri": "string",
-  "redirect_uris": [
-    "string"
-  ],
-  "registration_access_token": "string",
-  "registration_client_uri": "string",
-  "response_types": [
-    "string"
-  ],
-  "scope": "string",
-  "software_id": "string",
-  "software_version": "string",
-  "token_endpoint_auth_method": "string",
-  "tos_uri": "string"
-}
-```
-
-### Responses
-
-| Status | Meaning                                                      | Description | Schema                                                                                           |
-|--------|--------------------------------------------------------------|-------------|--------------------------------------------------------------------------------------------------|
-| 201    | [Created](https://tools.ietf.org/html/rfc7231#section-6.3.2) | Created     | [codersdk.OAuth2ClientRegistrationResponse](schemas.md#codersdkoauth2clientregistrationresponse) |
-
-## Revoke OAuth2 tokens (RFC 7009)
-
-### Code samples
-
-```shell
-# Example request using curl
-curl -X POST http://coder-server:8080/api/v2/oauth2/revoke \
-
-```
-
-`POST /oauth2/revoke`
-
-> Body parameter
-
-```yaml
-client_id: string
-token: string
-token_type_hint: string
-
-```
-
-### Parameters
-
-| Name                | In   | Type   | Required | Description                                           |
-|---------------------|------|--------|----------|-------------------------------------------------------|
-| `body`              | body | object | true     |                                                       |
-| `» client_id`       | body | string | true     | Client ID for authentication                          |
-| `» token`           | body | string | true     | The token to revoke                                   |
-| `» token_type_hint` | body | string | false    | Hint about token type (access_token or refresh_token) |
-
-### Responses
-
-| Status | Meaning                                                 | Description                | Schema |
-|--------|---------------------------------------------------------|----------------------------|--------|
-| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | Token successfully revoked |        |
-
-## OAuth2 token exchange
-
-### Code samples
-
-```shell
-# Example request using curl
-curl -X POST http://coder-server:8080/api/v2/oauth2/tokens \
-  -H 'Accept: application/json'
-```
-
-`POST /oauth2/tokens`
-
-> Body parameter
-
-```yaml
-client_id: string
-client_secret: string
-code: string
-refresh_token: string
-grant_type: authorization_code
-
-```
-
-### Parameters
-
-| Name              | In   | Type   | Required | Description                                                   |
-|-------------------|------|--------|----------|---------------------------------------------------------------|
-| `body`            | body | object | false    |                                                               |
-| `» client_id`     | body | string | false    | Client ID, required if grant_type=authorization_code          |
-| `» client_secret` | body | string | false    | Client secret, required if grant_type=authorization_code      |
-| `» code`          | body | string | false    | Authorization code, required if grant_type=authorization_code |
-| `» refresh_token` | body | string | false    | Refresh token, required if grant_type=refresh_token           |
-| `» grant_type`    | body | string | true     | Grant type                                                    |
-
-#### Enumerated Values
-
-| Parameter      | Value                |
-|----------------|----------------------|
-| `» grant_type` | `authorization_code` |
-| `» grant_type` | `refresh_token`      |
-
-### Example responses
-
-> 200 Response
-
-```json
-{
-  "access_token": "string",
-  "expires_in": 0,
-  "expiry": "string",
-  "refresh_token": "string",
-  "token_type": "string"
-}
-```
-
-### Responses
-
-| Status | Meaning                                                 | Description | Schema                                 |
-|--------|---------------------------------------------------------|-------------|----------------------------------------|
-| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [oauth2.Token](schemas.md#oauth2token) |
-
-## Delete OAuth2 application tokens
-
-### Code samples
-
-```shell
-# Example request using curl
-curl -X DELETE http://coder-server:8080/api/v2/oauth2/tokens?client_id=string \
-  -H 'Coder-Session-Token: API_KEY'
-```
-
-`DELETE /oauth2/tokens`
-
-### Parameters
-
-| Name        | In    | Type   | Required | Description |
-|-------------|-------|--------|----------|-------------|
-| `client_id` | query | string | true     | Client ID   |
 
 ### Responses
 
@@ -1643,7 +1316,7 @@ curl -X GET http://coder-server:8080/api/v2/organizations/{organization}/groups 
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /organizations/{organization}/groups`
+`GET /api/v2/organizations/{organization}/groups`
 
 ### Parameters
 
@@ -1667,6 +1340,7 @@ curl -X GET http://coder-server:8080/api/v2/organizations/{organization}/groups 
         "created_at": "2019-08-24T14:15:22Z",
         "email": "user@example.com",
         "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+        "is_service_account": true,
         "last_seen_at": "2019-08-24T14:15:22Z",
         "login_type": "",
         "name": "string",
@@ -1708,6 +1382,7 @@ Status Code **200**
 | `»» created_at`               | string(date-time)                                      | true     |              |                                                                                                                                                                       |
 | `»» email`                    | string(email)                                          | true     |              |                                                                                                                                                                       |
 | `»» id`                       | string(uuid)                                           | true     |              |                                                                                                                                                                       |
+| `»» is_service_account`       | boolean                                                | false    |              |                                                                                                                                                                       |
 | `»» last_seen_at`             | string(date-time)                                      | false    |              |                                                                                                                                                                       |
 | `»» login_type`               | [codersdk.LoginType](schemas.md#codersdklogintype)     | false    |              |                                                                                                                                                                       |
 | `»» name`                     | string                                                 | false    |              |                                                                                                                                                                       |
@@ -1725,18 +1400,11 @@ Status Code **200**
 
 #### Enumerated Values
 
-| Property     | Value       |
-|--------------|-------------|
-| `login_type` | ``          |
-| `login_type` | `password`  |
-| `login_type` | `github`    |
-| `login_type` | `oidc`      |
-| `login_type` | `token`     |
-| `login_type` | `none`      |
-| `status`     | `active`    |
-| `status`     | `suspended` |
-| `source`     | `user`      |
-| `source`     | `oidc`      |
+| Property     | Value(s)                                          |
+|--------------|---------------------------------------------------|
+| `login_type` | ``, `github`, `none`, `oidc`, `password`, `token` |
+| `status`     | `active`, `suspended`                             |
+| `source`     | `oidc`, `user`                                    |
 
 To perform this operation, you must be authenticated. [Learn more](authentication.md).
 
@@ -1752,7 +1420,7 @@ curl -X POST http://coder-server:8080/api/v2/organizations/{organization}/groups
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`POST /organizations/{organization}/groups`
+`POST /api/v2/organizations/{organization}/groups`
 
 > Body parameter
 
@@ -1787,6 +1455,7 @@ curl -X POST http://coder-server:8080/api/v2/organizations/{organization}/groups
       "created_at": "2019-08-24T14:15:22Z",
       "email": "user@example.com",
       "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "is_service_account": true,
       "last_seen_at": "2019-08-24T14:15:22Z",
       "login_type": "",
       "name": "string",
@@ -1825,7 +1494,7 @@ curl -X GET http://coder-server:8080/api/v2/organizations/{organization}/groups/
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /organizations/{organization}/groups/{groupName}`
+`GET /api/v2/organizations/{organization}/groups/{groupName}`
 
 ### Parameters
 
@@ -1849,6 +1518,7 @@ curl -X GET http://coder-server:8080/api/v2/organizations/{organization}/groups/
       "created_at": "2019-08-24T14:15:22Z",
       "email": "user@example.com",
       "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "is_service_account": true,
       "last_seen_at": "2019-08-24T14:15:22Z",
       "login_type": "",
       "name": "string",
@@ -1876,6 +1546,64 @@ curl -X GET http://coder-server:8080/api/v2/organizations/{organization}/groups/
 
 To perform this operation, you must be authenticated. [Learn more](authentication.md).
 
+## Get group members by organization and group name
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X GET http://coder-server:8080/api/v2/organizations/{organization}/groups/{groupName}/members \
+  -H 'Accept: application/json' \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`GET /api/v2/organizations/{organization}/groups/{groupName}/members`
+
+### Parameters
+
+| Name           | In    | Type         | Required | Description         |
+|----------------|-------|--------------|----------|---------------------|
+| `organization` | path  | string(uuid) | true     | Organization ID     |
+| `groupName`    | path  | string       | true     | Group name          |
+| `q`            | query | string       | false    | Member search query |
+| `after_id`     | query | string(uuid) | false    | After ID            |
+| `limit`        | query | integer      | false    | Page limit          |
+| `offset`       | query | integer      | false    | Page offset         |
+
+### Example responses
+
+> 200 Response
+
+```json
+{
+  "count": 0,
+  "users": [
+    {
+      "avatar_url": "http://example.com",
+      "created_at": "2019-08-24T14:15:22Z",
+      "email": "user@example.com",
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "is_service_account": true,
+      "last_seen_at": "2019-08-24T14:15:22Z",
+      "login_type": "",
+      "name": "string",
+      "status": "active",
+      "theme_preference": "string",
+      "updated_at": "2019-08-24T14:15:22Z",
+      "username": "string"
+    }
+  ]
+}
+```
+
+### Responses
+
+| Status | Meaning                                                 | Description | Schema                                                                   |
+|--------|---------------------------------------------------------|-------------|--------------------------------------------------------------------------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.GroupMembersResponse](schemas.md#codersdkgroupmembersresponse) |
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
 ## Get workspace quota by user
 
 ### Code samples
@@ -1887,7 +1615,7 @@ curl -X GET http://coder-server:8080/api/v2/organizations/{organization}/members
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /organizations/{organization}/members/{user}/workspace-quota`
+`GET /api/v2/organizations/{organization}/members/{user}/workspace-quota`
 
 ### Parameters
 
@@ -1925,7 +1653,7 @@ curl -X GET http://coder-server:8080/api/v2/organizations/{organization}/provisi
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /organizations/{organization}/provisionerdaemons/serve`
+`GET /api/v2/organizations/{organization}/provisionerdaemons/serve`
 
 ### Parameters
 
@@ -1952,7 +1680,7 @@ curl -X GET http://coder-server:8080/api/v2/organizations/{organization}/provisi
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /organizations/{organization}/provisionerkeys`
+`GET /api/v2/organizations/{organization}/provisionerkeys`
 
 ### Parameters
 
@@ -2012,7 +1740,7 @@ curl -X POST http://coder-server:8080/api/v2/organizations/{organization}/provis
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`POST /organizations/{organization}/provisionerkeys`
+`POST /api/v2/organizations/{organization}/provisionerkeys`
 
 ### Parameters
 
@@ -2049,7 +1777,7 @@ curl -X GET http://coder-server:8080/api/v2/organizations/{organization}/provisi
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /organizations/{organization}/provisionerkeys/daemons`
+`GET /api/v2/organizations/{organization}/provisionerkeys/daemons`
 
 ### Parameters
 
@@ -2157,17 +1885,9 @@ Status Code **200**
 
 #### Enumerated Values
 
-| Property | Value       |
-|----------|-------------|
-| `status` | `pending`   |
-| `status` | `running`   |
-| `status` | `succeeded` |
-| `status` | `canceling` |
-| `status` | `canceled`  |
-| `status` | `failed`    |
-| `status` | `offline`   |
-| `status` | `idle`      |
-| `status` | `busy`      |
+| Property | Value(s)                                                                                        |
+|----------|-------------------------------------------------------------------------------------------------|
+| `status` | `busy`, `canceled`, `canceling`, `failed`, `idle`, `offline`, `pending`, `running`, `succeeded` |
 
 To perform this operation, you must be authenticated. [Learn more](authentication.md).
 
@@ -2181,7 +1901,7 @@ curl -X DELETE http://coder-server:8080/api/v2/organizations/{organization}/prov
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`DELETE /organizations/{organization}/provisionerkeys/{provisionerkey}`
+`DELETE /api/v2/organizations/{organization}/provisionerkeys/{provisionerkey}`
 
 ### Parameters
 
@@ -2209,7 +1929,7 @@ curl -X GET http://coder-server:8080/api/v2/organizations/{organization}/setting
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /organizations/{organization}/settings/idpsync/available-fields`
+`GET /api/v2/organizations/{organization}/settings/idpsync/available-fields`
 
 ### Parameters
 
@@ -2248,7 +1968,7 @@ curl -X GET http://coder-server:8080/api/v2/organizations/{organization}/setting
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /organizations/{organization}/settings/idpsync/field-values`
+`GET /api/v2/organizations/{organization}/settings/idpsync/field-values`
 
 ### Parameters
 
@@ -2288,7 +2008,7 @@ curl -X GET http://coder-server:8080/api/v2/organizations/{organization}/setting
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /organizations/{organization}/settings/idpsync/groups`
+`GET /api/v2/organizations/{organization}/settings/idpsync/groups`
 
 ### Parameters
 
@@ -2340,7 +2060,7 @@ curl -X PATCH http://coder-server:8080/api/v2/organizations/{organization}/setti
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`PATCH /organizations/{organization}/settings/idpsync/groups`
+`PATCH /api/v2/organizations/{organization}/settings/idpsync/groups`
 
 > Body parameter
 
@@ -2415,7 +2135,7 @@ curl -X PATCH http://coder-server:8080/api/v2/organizations/{organization}/setti
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`PATCH /organizations/{organization}/settings/idpsync/groups/config`
+`PATCH /api/v2/organizations/{organization}/settings/idpsync/groups/config`
 
 > Body parameter
 
@@ -2478,7 +2198,7 @@ curl -X PATCH http://coder-server:8080/api/v2/organizations/{organization}/setti
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`PATCH /organizations/{organization}/settings/idpsync/groups/mapping`
+`PATCH /api/v2/organizations/{organization}/settings/idpsync/groups/mapping`
 
 > Body parameter
 
@@ -2549,7 +2269,7 @@ curl -X GET http://coder-server:8080/api/v2/organizations/{organization}/setting
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /organizations/{organization}/settings/idpsync/roles`
+`GET /api/v2/organizations/{organization}/settings/idpsync/roles`
 
 ### Parameters
 
@@ -2595,7 +2315,7 @@ curl -X PATCH http://coder-server:8080/api/v2/organizations/{organization}/setti
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`PATCH /organizations/{organization}/settings/idpsync/roles`
+`PATCH /api/v2/organizations/{organization}/settings/idpsync/roles`
 
 > Body parameter
 
@@ -2658,7 +2378,7 @@ curl -X PATCH http://coder-server:8080/api/v2/organizations/{organization}/setti
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`PATCH /organizations/{organization}/settings/idpsync/roles/config`
+`PATCH /api/v2/organizations/{organization}/settings/idpsync/roles/config`
 
 > Body parameter
 
@@ -2713,7 +2433,7 @@ curl -X PATCH http://coder-server:8080/api/v2/organizations/{organization}/setti
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`PATCH /organizations/{organization}/settings/idpsync/roles/mapping`
+`PATCH /api/v2/organizations/{organization}/settings/idpsync/roles/mapping`
 
 > Body parameter
 
@@ -2767,6 +2487,95 @@ curl -X PATCH http://coder-server:8080/api/v2/organizations/{organization}/setti
 
 To perform this operation, you must be authenticated. [Learn more](authentication.md).
 
+## Get workspace sharing settings for organization
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X GET http://coder-server:8080/api/v2/organizations/{organization}/settings/workspace-sharing \
+  -H 'Accept: application/json' \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`GET /api/v2/organizations/{organization}/settings/workspace-sharing`
+
+### Parameters
+
+| Name           | In   | Type         | Required | Description     |
+|----------------|------|--------------|----------|-----------------|
+| `organization` | path | string(uuid) | true     | Organization ID |
+
+### Example responses
+
+> 200 Response
+
+```json
+{
+  "shareable_workspace_owners": "none",
+  "sharing_disabled": true,
+  "sharing_globally_disabled": true
+}
+```
+
+### Responses
+
+| Status | Meaning                                                 | Description | Schema                                                                           |
+|--------|---------------------------------------------------------|-------------|----------------------------------------------------------------------------------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.WorkspaceSharingSettings](schemas.md#codersdkworkspacesharingsettings) |
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
+## Update workspace sharing settings for organization
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X PATCH http://coder-server:8080/api/v2/organizations/{organization}/settings/workspace-sharing \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`PATCH /api/v2/organizations/{organization}/settings/workspace-sharing`
+
+> Body parameter
+
+```json
+{
+  "shareable_workspace_owners": "none",
+  "sharing_disabled": true
+}
+```
+
+### Parameters
+
+| Name           | In   | Type                                                                                                       | Required | Description                |
+|----------------|------|------------------------------------------------------------------------------------------------------------|----------|----------------------------|
+| `organization` | path | string(uuid)                                                                                               | true     | Organization ID            |
+| `body`         | body | [codersdk.UpdateWorkspaceSharingSettingsRequest](schemas.md#codersdkupdateworkspacesharingsettingsrequest) | true     | Workspace sharing settings |
+
+### Example responses
+
+> 200 Response
+
+```json
+{
+  "shareable_workspace_owners": "none",
+  "sharing_disabled": true,
+  "sharing_globally_disabled": true
+}
+```
+
+### Responses
+
+| Status | Meaning                                                 | Description | Schema                                                                           |
+|--------|---------------------------------------------------------|-------------|----------------------------------------------------------------------------------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.WorkspaceSharingSettings](schemas.md#codersdkworkspacesharingsettings) |
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
 ## Fetch provisioner key details
 
 ### Code samples
@@ -2777,7 +2586,7 @@ curl -X GET http://coder-server:8080/api/v2/provisionerkeys/{provisionerkey} \
   -H 'Accept: application/json'
 ```
 
-`GET /provisionerkeys/{provisionerkey}`
+`GET /api/v2/provisionerkeys/{provisionerkey}`
 
 ### Parameters
 
@@ -2821,7 +2630,7 @@ curl -X GET http://coder-server:8080/api/v2/replicas \
   -H 'Coder-Session-Token: API_KEY'
 ```
 
-`GET /replicas`
+`GET /api/v2/replicas`
 
 ### Example responses
 
@@ -2864,13 +2673,1659 @@ Status Code **200**
 
 To perform this operation, you must be authenticated. [Learn more](authentication.md).
 
+## Get the available idp sync claim fields
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X GET http://coder-server:8080/api/v2/settings/idpsync/available-fields \
+  -H 'Accept: application/json' \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`GET /api/v2/settings/idpsync/available-fields`
+
+### Parameters
+
+| Name           | In   | Type         | Required | Description     |
+|----------------|------|--------------|----------|-----------------|
+| `organization` | path | string(uuid) | true     | Organization ID |
+
+### Example responses
+
+> 200 Response
+
+```json
+[
+  "string"
+]
+```
+
+### Responses
+
+| Status | Meaning                                                 | Description | Schema          |
+|--------|---------------------------------------------------------|-------------|-----------------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | array of string |
+
+<h3 id="get-the-available-idp-sync-claim-fields-responseschema">Response Schema</h3>
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
+## Get the idp sync claim field values
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X GET http://coder-server:8080/api/v2/settings/idpsync/field-values?claimField=string \
+  -H 'Accept: application/json' \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`GET /api/v2/settings/idpsync/field-values`
+
+### Parameters
+
+| Name           | In    | Type           | Required | Description     |
+|----------------|-------|----------------|----------|-----------------|
+| `organization` | path  | string(uuid)   | true     | Organization ID |
+| `claimField`   | query | string(string) | true     | Claim Field     |
+
+### Example responses
+
+> 200 Response
+
+```json
+[
+  "string"
+]
+```
+
+### Responses
+
+| Status | Meaning                                                 | Description | Schema          |
+|--------|---------------------------------------------------------|-------------|-----------------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | array of string |
+
+<h3 id="get-the-idp-sync-claim-field-values-responseschema">Response Schema</h3>
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
+## Get organization IdP Sync settings
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X GET http://coder-server:8080/api/v2/settings/idpsync/organization \
+  -H 'Accept: application/json' \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`GET /api/v2/settings/idpsync/organization`
+
+### Example responses
+
+> 200 Response
+
+```json
+{
+  "field": "string",
+  "mapping": {
+    "property1": [
+      "string"
+    ],
+    "property2": [
+      "string"
+    ]
+  },
+  "organization_assign_default": true
+}
+```
+
+### Responses
+
+| Status | Meaning                                                 | Description | Schema                                                                           |
+|--------|---------------------------------------------------------|-------------|----------------------------------------------------------------------------------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.OrganizationSyncSettings](schemas.md#codersdkorganizationsyncsettings) |
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
+## Update organization IdP Sync settings
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X PATCH http://coder-server:8080/api/v2/settings/idpsync/organization \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`PATCH /api/v2/settings/idpsync/organization`
+
+> Body parameter
+
+```json
+{
+  "field": "string",
+  "mapping": {
+    "property1": [
+      "string"
+    ],
+    "property2": [
+      "string"
+    ]
+  },
+  "organization_assign_default": true
+}
+```
+
+### Parameters
+
+| Name   | In   | Type                                                                             | Required | Description  |
+|--------|------|----------------------------------------------------------------------------------|----------|--------------|
+| `body` | body | [codersdk.OrganizationSyncSettings](schemas.md#codersdkorganizationsyncsettings) | true     | New settings |
+
+### Example responses
+
+> 200 Response
+
+```json
+{
+  "field": "string",
+  "mapping": {
+    "property1": [
+      "string"
+    ],
+    "property2": [
+      "string"
+    ]
+  },
+  "organization_assign_default": true
+}
+```
+
+### Responses
+
+| Status | Meaning                                                 | Description | Schema                                                                           |
+|--------|---------------------------------------------------------|-------------|----------------------------------------------------------------------------------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.OrganizationSyncSettings](schemas.md#codersdkorganizationsyncsettings) |
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
+## Update organization IdP Sync config
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X PATCH http://coder-server:8080/api/v2/settings/idpsync/organization/config \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`PATCH /api/v2/settings/idpsync/organization/config`
+
+> Body parameter
+
+```json
+{
+  "assign_default": true,
+  "field": "string"
+}
+```
+
+### Parameters
+
+| Name   | In   | Type                                                                                                       | Required | Description       |
+|--------|------|------------------------------------------------------------------------------------------------------------|----------|-------------------|
+| `body` | body | [codersdk.PatchOrganizationIDPSyncConfigRequest](schemas.md#codersdkpatchorganizationidpsyncconfigrequest) | true     | New config values |
+
+### Example responses
+
+> 200 Response
+
+```json
+{
+  "field": "string",
+  "mapping": {
+    "property1": [
+      "string"
+    ],
+    "property2": [
+      "string"
+    ]
+  },
+  "organization_assign_default": true
+}
+```
+
+### Responses
+
+| Status | Meaning                                                 | Description | Schema                                                                           |
+|--------|---------------------------------------------------------|-------------|----------------------------------------------------------------------------------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.OrganizationSyncSettings](schemas.md#codersdkorganizationsyncsettings) |
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
+## Update organization IdP Sync mapping
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X PATCH http://coder-server:8080/api/v2/settings/idpsync/organization/mapping \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`PATCH /api/v2/settings/idpsync/organization/mapping`
+
+> Body parameter
+
+```json
+{
+  "add": [
+    {
+      "gets": "string",
+      "given": "string"
+    }
+  ],
+  "remove": [
+    {
+      "gets": "string",
+      "given": "string"
+    }
+  ]
+}
+```
+
+### Parameters
+
+| Name   | In   | Type                                                                                                         | Required | Description                                   |
+|--------|------|--------------------------------------------------------------------------------------------------------------|----------|-----------------------------------------------|
+| `body` | body | [codersdk.PatchOrganizationIDPSyncMappingRequest](schemas.md#codersdkpatchorganizationidpsyncmappingrequest) | true     | Description of the mappings to add and remove |
+
+### Example responses
+
+> 200 Response
+
+```json
+{
+  "field": "string",
+  "mapping": {
+    "property1": [
+      "string"
+    ],
+    "property2": [
+      "string"
+    ]
+  },
+  "organization_assign_default": true
+}
+```
+
+### Responses
+
+| Status | Meaning                                                 | Description | Schema                                                                           |
+|--------|---------------------------------------------------------|-------------|----------------------------------------------------------------------------------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.OrganizationSyncSettings](schemas.md#codersdkorganizationsyncsettings) |
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
+## Get template ACLs
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X GET http://coder-server:8080/api/v2/templates/{template}/acl \
+  -H 'Accept: application/json' \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`GET /api/v2/templates/{template}/acl`
+
+### Parameters
+
+| Name       | In   | Type         | Required | Description |
+|------------|------|--------------|----------|-------------|
+| `template` | path | string(uuid) | true     | Template ID |
+
+### Example responses
+
+> 200 Response
+
+```json
+{
+  "group": [
+    {
+      "avatar_url": "http://example.com",
+      "display_name": "string",
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "members": [
+        {
+          "avatar_url": "http://example.com",
+          "created_at": "2019-08-24T14:15:22Z",
+          "email": "user@example.com",
+          "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+          "is_service_account": true,
+          "last_seen_at": "2019-08-24T14:15:22Z",
+          "login_type": "",
+          "name": "string",
+          "status": "active",
+          "theme_preference": "string",
+          "updated_at": "2019-08-24T14:15:22Z",
+          "username": "string"
+        }
+      ],
+      "name": "string",
+      "organization_display_name": "string",
+      "organization_id": "7c60d51f-b44e-4682-87d6-449835ea4de6",
+      "organization_name": "string",
+      "quota_allowance": 0,
+      "role": "admin",
+      "source": "user",
+      "total_member_count": 0
+    }
+  ],
+  "users": [
+    {
+      "avatar_url": "http://example.com",
+      "created_at": "2019-08-24T14:15:22Z",
+      "email": "user@example.com",
+      "has_ai_seat": true,
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "is_service_account": true,
+      "last_seen_at": "2019-08-24T14:15:22Z",
+      "login_type": "",
+      "name": "string",
+      "organization_ids": [
+        "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+      ],
+      "role": "admin",
+      "roles": [
+        {
+          "display_name": "string",
+          "name": "string",
+          "organization_id": "string"
+        }
+      ],
+      "status": "active",
+      "theme_preference": "string",
+      "updated_at": "2019-08-24T14:15:22Z",
+      "username": "string"
+    }
+  ]
+}
+```
+
+### Responses
+
+| Status | Meaning                                                 | Description | Schema                                                 |
+|--------|---------------------------------------------------------|-------------|--------------------------------------------------------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.TemplateACL](schemas.md#codersdktemplateacl) |
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
+## Update template ACL
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X PATCH http://coder-server:8080/api/v2/templates/{template}/acl \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`PATCH /api/v2/templates/{template}/acl`
+
+> Body parameter
+
+```json
+{
+  "group_perms": {
+    "8bd26b20-f3e8-48be-a903-46bb920cf671": "use",
+    "<group_id>": "admin"
+  },
+  "user_perms": {
+    "4df59e74-c027-470b-ab4d-cbba8963a5e9": "use",
+    "<user_id>": "admin"
+  }
+}
+```
+
+### Parameters
+
+| Name       | In   | Type                                                               | Required | Description                 |
+|------------|------|--------------------------------------------------------------------|----------|-----------------------------|
+| `template` | path | string(uuid)                                                       | true     | Template ID                 |
+| `body`     | body | [codersdk.UpdateTemplateACL](schemas.md#codersdkupdatetemplateacl) | true     | Update template ACL request |
+
+### Example responses
+
+> 200 Response
+
+```json
+{
+  "detail": "string",
+  "message": "string",
+  "validations": [
+    {
+      "detail": "string",
+      "field": "string"
+    }
+  ]
+}
+```
+
+### Responses
+
+| Status | Meaning                                                 | Description | Schema                                           |
+|--------|---------------------------------------------------------|-------------|--------------------------------------------------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.Response](schemas.md#codersdkresponse) |
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
+## Get template available acl users/groups
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X GET http://coder-server:8080/api/v2/templates/{template}/acl/available \
+  -H 'Accept: application/json' \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`GET /api/v2/templates/{template}/acl/available`
+
+### Parameters
+
+| Name       | In   | Type         | Required | Description |
+|------------|------|--------------|----------|-------------|
+| `template` | path | string(uuid) | true     | Template ID |
+
+### Example responses
+
+> 200 Response
+
+```json
+[
+  {
+    "groups": [
+      {
+        "avatar_url": "http://example.com",
+        "display_name": "string",
+        "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+        "members": [
+          {
+            "avatar_url": "http://example.com",
+            "created_at": "2019-08-24T14:15:22Z",
+            "email": "user@example.com",
+            "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+            "is_service_account": true,
+            "last_seen_at": "2019-08-24T14:15:22Z",
+            "login_type": "",
+            "name": "string",
+            "status": "active",
+            "theme_preference": "string",
+            "updated_at": "2019-08-24T14:15:22Z",
+            "username": "string"
+          }
+        ],
+        "name": "string",
+        "organization_display_name": "string",
+        "organization_id": "7c60d51f-b44e-4682-87d6-449835ea4de6",
+        "organization_name": "string",
+        "quota_allowance": 0,
+        "source": "user",
+        "total_member_count": 0
+      }
+    ],
+    "users": [
+      {
+        "avatar_url": "http://example.com",
+        "created_at": "2019-08-24T14:15:22Z",
+        "email": "user@example.com",
+        "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+        "is_service_account": true,
+        "last_seen_at": "2019-08-24T14:15:22Z",
+        "login_type": "",
+        "name": "string",
+        "status": "active",
+        "theme_preference": "string",
+        "updated_at": "2019-08-24T14:15:22Z",
+        "username": "string"
+      }
+    ]
+  }
+]
+```
+
+### Responses
+
+| Status | Meaning                                                 | Description | Schema                                                            |
+|--------|---------------------------------------------------------|-------------|-------------------------------------------------------------------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | array of [codersdk.ACLAvailable](schemas.md#codersdkaclavailable) |
+
+<h3 id="get-template-available-acl-users/groups-responseschema">Response Schema</h3>
+
+Status Code **200**
+
+| Name                           | Type                                                   | Required | Restrictions | Description                                                                                                                                                           |
+|--------------------------------|--------------------------------------------------------|----------|--------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `[array item]`                 | array                                                  | false    |              |                                                                                                                                                                       |
+| `» groups`                     | array                                                  | false    |              |                                                                                                                                                                       |
+| `»» avatar_url`                | string(uri)                                            | false    |              |                                                                                                                                                                       |
+| `»» display_name`              | string                                                 | false    |              |                                                                                                                                                                       |
+| `»» id`                        | string(uuid)                                           | false    |              |                                                                                                                                                                       |
+| `»» members`                   | array                                                  | false    |              |                                                                                                                                                                       |
+| `»»» avatar_url`               | string(uri)                                            | false    |              |                                                                                                                                                                       |
+| `»»» created_at`               | string(date-time)                                      | true     |              |                                                                                                                                                                       |
+| `»»» email`                    | string(email)                                          | true     |              |                                                                                                                                                                       |
+| `»»» id`                       | string(uuid)                                           | true     |              |                                                                                                                                                                       |
+| `»»» is_service_account`       | boolean                                                | false    |              |                                                                                                                                                                       |
+| `»»» last_seen_at`             | string(date-time)                                      | false    |              |                                                                                                                                                                       |
+| `»»» login_type`               | [codersdk.LoginType](schemas.md#codersdklogintype)     | false    |              |                                                                                                                                                                       |
+| `»»» name`                     | string                                                 | false    |              |                                                                                                                                                                       |
+| `»»» status`                   | [codersdk.UserStatus](schemas.md#codersdkuserstatus)   | false    |              |                                                                                                                                                                       |
+| `»»» theme_preference`         | string                                                 | false    |              | Deprecated: this value should be retrieved from `codersdk.UserPreferenceSettings` instead.                                                                            |
+| `»»» updated_at`               | string(date-time)                                      | false    |              |                                                                                                                                                                       |
+| `»»» username`                 | string                                                 | true     |              |                                                                                                                                                                       |
+| `»» name`                      | string                                                 | false    |              |                                                                                                                                                                       |
+| `»» organization_display_name` | string                                                 | false    |              |                                                                                                                                                                       |
+| `»» organization_id`           | string(uuid)                                           | false    |              |                                                                                                                                                                       |
+| `»» organization_name`         | string                                                 | false    |              |                                                                                                                                                                       |
+| `»» quota_allowance`           | integer                                                | false    |              |                                                                                                                                                                       |
+| `»» source`                    | [codersdk.GroupSource](schemas.md#codersdkgroupsource) | false    |              |                                                                                                                                                                       |
+| `»» total_member_count`        | integer                                                | false    |              | How many members are in this group. Shows the total count, even if the user is not authorized to read group member details. May be greater than `len(Group.Members)`. |
+| `» users`                      | array                                                  | false    |              |                                                                                                                                                                       |
+
+#### Enumerated Values
+
+| Property     | Value(s)                                          |
+|--------------|---------------------------------------------------|
+| `login_type` | ``, `github`, `none`, `oidc`, `password`, `token` |
+| `status`     | `active`, `suspended`                             |
+| `source`     | `oidc`, `user`                                    |
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
+## Invalidate presets for template
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X POST http://coder-server:8080/api/v2/templates/{template}/prebuilds/invalidate \
+  -H 'Accept: application/json' \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`POST /api/v2/templates/{template}/prebuilds/invalidate`
+
+### Parameters
+
+| Name       | In   | Type         | Required | Description |
+|------------|------|--------------|----------|-------------|
+| `template` | path | string(uuid) | true     | Template ID |
+
+### Example responses
+
+> 200 Response
+
+```json
+{
+  "invalidated": [
+    {
+      "preset_name": "string",
+      "template_name": "string",
+      "template_version_name": "string"
+    }
+  ]
+}
+```
+
+### Responses
+
+| Status | Meaning                                                 | Description | Schema                                                                             |
+|--------|---------------------------------------------------------|-------------|------------------------------------------------------------------------------------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.InvalidatePresetsResponse](schemas.md#codersdkinvalidatepresetsresponse) |
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
+## Get user quiet hours schedule
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X GET http://coder-server:8080/api/v2/users/{user}/quiet-hours \
+  -H 'Accept: application/json' \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`GET /api/v2/users/{user}/quiet-hours`
+
+### Parameters
+
+| Name   | In   | Type         | Required | Description |
+|--------|------|--------------|----------|-------------|
+| `user` | path | string(uuid) | true     | User ID     |
+
+### Example responses
+
+> 200 Response
+
+```json
+[
+  {
+    "next": "2019-08-24T14:15:22Z",
+    "raw_schedule": "string",
+    "time": "string",
+    "timezone": "string",
+    "user_can_set": true,
+    "user_set": true
+  }
+]
+```
+
+### Responses
+
+| Status | Meaning                                                 | Description | Schema                                                                                                |
+|--------|---------------------------------------------------------|-------------|-------------------------------------------------------------------------------------------------------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | array of [codersdk.UserQuietHoursScheduleResponse](schemas.md#codersdkuserquiethoursscheduleresponse) |
+
+<h3 id="get-user-quiet-hours-schedule-responseschema">Response Schema</h3>
+
+Status Code **200**
+
+| Name             | Type              | Required | Restrictions | Description                                                                                                                                                                      |
+|------------------|-------------------|----------|--------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `[array item]`   | array             | false    |              |                                                                                                                                                                                  |
+| `» next`         | string(date-time) | false    |              | Next is the next time that the quiet hours window will start.                                                                                                                    |
+| `» raw_schedule` | string            | false    |              |                                                                                                                                                                                  |
+| `» time`         | string            | false    |              | Time is the time of day that the quiet hours window starts in the given Timezone each day.                                                                                       |
+| `» timezone`     | string            | false    |              | raw format from the cron expression, UTC if unspecified                                                                                                                          |
+| `» user_can_set` | boolean           | false    |              | User can set is true if the user is allowed to set their own quiet hours schedule. If false, the user cannot set a custom schedule and the default schedule will always be used. |
+| `» user_set`     | boolean           | false    |              | User set is true if the user has set their own quiet hours schedule. If false, the user is using the default schedule.                                                           |
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
+## Update user quiet hours schedule
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X PUT http://coder-server:8080/api/v2/users/{user}/quiet-hours \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`PUT /api/v2/users/{user}/quiet-hours`
+
+> Body parameter
+
+```json
+{
+  "schedule": "string"
+}
+```
+
+### Parameters
+
+| Name   | In   | Type                                                                                                   | Required | Description             |
+|--------|------|--------------------------------------------------------------------------------------------------------|----------|-------------------------|
+| `user` | path | string(uuid)                                                                                           | true     | User ID                 |
+| `body` | body | [codersdk.UpdateUserQuietHoursScheduleRequest](schemas.md#codersdkupdateuserquiethoursschedulerequest) | true     | Update schedule request |
+
+### Example responses
+
+> 200 Response
+
+```json
+[
+  {
+    "next": "2019-08-24T14:15:22Z",
+    "raw_schedule": "string",
+    "time": "string",
+    "timezone": "string",
+    "user_can_set": true,
+    "user_set": true
+  }
+]
+```
+
+### Responses
+
+| Status | Meaning                                                 | Description | Schema                                                                                                |
+|--------|---------------------------------------------------------|-------------|-------------------------------------------------------------------------------------------------------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | array of [codersdk.UserQuietHoursScheduleResponse](schemas.md#codersdkuserquiethoursscheduleresponse) |
+
+<h3 id="update-user-quiet-hours-schedule-responseschema">Response Schema</h3>
+
+Status Code **200**
+
+| Name             | Type              | Required | Restrictions | Description                                                                                                                                                                      |
+|------------------|-------------------|----------|--------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `[array item]`   | array             | false    |              |                                                                                                                                                                                  |
+| `» next`         | string(date-time) | false    |              | Next is the next time that the quiet hours window will start.                                                                                                                    |
+| `» raw_schedule` | string            | false    |              |                                                                                                                                                                                  |
+| `» time`         | string            | false    |              | Time is the time of day that the quiet hours window starts in the given Timezone each day.                                                                                       |
+| `» timezone`     | string            | false    |              | raw format from the cron expression, UTC if unspecified                                                                                                                          |
+| `» user_can_set` | boolean           | false    |              | User can set is true if the user is allowed to set their own quiet hours schedule. If false, the user cannot set a custom schedule and the default schedule will always be used. |
+| `» user_set`     | boolean           | false    |              | User set is true if the user has set their own quiet hours schedule. If false, the user is using the default schedule.                                                           |
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
+## Get workspace quota by user deprecated
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X GET http://coder-server:8080/api/v2/workspace-quota/{user} \
+  -H 'Accept: application/json' \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`GET /api/v2/workspace-quota/{user}`
+
+### Parameters
+
+| Name   | In   | Type   | Required | Description          |
+|--------|------|--------|----------|----------------------|
+| `user` | path | string | true     | User ID, name, or me |
+
+### Example responses
+
+> 200 Response
+
+```json
+{
+  "budget": 0,
+  "credits_consumed": 0
+}
+```
+
+### Responses
+
+| Status | Meaning                                                 | Description | Schema                                                       |
+|--------|---------------------------------------------------------|-------------|--------------------------------------------------------------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.WorkspaceQuota](schemas.md#codersdkworkspacequota) |
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
+## Get workspace proxies
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X GET http://coder-server:8080/api/v2/workspaceproxies \
+  -H 'Accept: application/json' \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`GET /api/v2/workspaceproxies`
+
+### Example responses
+
+> 200 Response
+
+```json
+[
+  {
+    "regions": [
+      {
+        "created_at": "2019-08-24T14:15:22Z",
+        "deleted": true,
+        "derp_enabled": true,
+        "derp_only": true,
+        "display_name": "string",
+        "healthy": true,
+        "icon_url": "string",
+        "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+        "name": "string",
+        "path_app_url": "string",
+        "status": {
+          "checked_at": "2019-08-24T14:15:22Z",
+          "report": {
+            "errors": [
+              "string"
+            ],
+            "warnings": [
+              "string"
+            ]
+          },
+          "status": "ok"
+        },
+        "updated_at": "2019-08-24T14:15:22Z",
+        "version": "string",
+        "wildcard_hostname": "string"
+      }
+    ]
+  }
+]
+```
+
+### Responses
+
+| Status | Meaning                                                 | Description | Schema                                                                                                                  |
+|--------|---------------------------------------------------------|-------------|-------------------------------------------------------------------------------------------------------------------------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | array of [codersdk.RegionsResponse-codersdk_WorkspaceProxy](schemas.md#codersdkregionsresponse-codersdk_workspaceproxy) |
+
+<h3 id="get-workspace-proxies-responseschema">Response Schema</h3>
+
+Status Code **200**
+
+| Name                   | Type                                                                     | Required | Restrictions | Description                                                                                                                                                                       |
+|------------------------|--------------------------------------------------------------------------|----------|--------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `[array item]`         | array                                                                    | false    |              |                                                                                                                                                                                   |
+| `» regions`            | array                                                                    | false    |              |                                                                                                                                                                                   |
+| `»» created_at`        | string(date-time)                                                        | false    |              |                                                                                                                                                                                   |
+| `»» deleted`           | boolean                                                                  | false    |              |                                                                                                                                                                                   |
+| `»» derp_enabled`      | boolean                                                                  | false    |              |                                                                                                                                                                                   |
+| `»» derp_only`         | boolean                                                                  | false    |              |                                                                                                                                                                                   |
+| `»» display_name`      | string                                                                   | false    |              |                                                                                                                                                                                   |
+| `»» healthy`           | boolean                                                                  | false    |              |                                                                                                                                                                                   |
+| `»» icon_url`          | string                                                                   | false    |              |                                                                                                                                                                                   |
+| `»» id`                | string(uuid)                                                             | false    |              |                                                                                                                                                                                   |
+| `»» name`              | string                                                                   | false    |              |                                                                                                                                                                                   |
+| `»» path_app_url`      | string                                                                   | false    |              | Path app URL is the URL to the base path for path apps. Optional unless wildcard_hostname is set. E.g. https://us.example.com                                                     |
+| `»» status`            | [codersdk.WorkspaceProxyStatus](schemas.md#codersdkworkspaceproxystatus) | false    |              | Status is the latest status check of the proxy. This will be empty for deleted proxies. This value can be used to determine if a workspace proxy is healthy and ready to use.     |
+| `»»» checked_at`       | string(date-time)                                                        | false    |              |                                                                                                                                                                                   |
+| `»»» report`           | [codersdk.ProxyHealthReport](schemas.md#codersdkproxyhealthreport)       | false    |              | Report provides more information about the health of the workspace proxy.                                                                                                         |
+| `»»»» errors`          | array                                                                    | false    |              | Errors are problems that prevent the workspace proxy from being healthy                                                                                                           |
+| `»»»» warnings`        | array                                                                    | false    |              | Warnings do not prevent the workspace proxy from being healthy, but should be addressed.                                                                                          |
+| `»»» status`           | [codersdk.ProxyHealthStatus](schemas.md#codersdkproxyhealthstatus)       | false    |              |                                                                                                                                                                                   |
+| `»» updated_at`        | string(date-time)                                                        | false    |              |                                                                                                                                                                                   |
+| `»» version`           | string                                                                   | false    |              |                                                                                                                                                                                   |
+| `»» wildcard_hostname` | string                                                                   | false    |              | Wildcard hostname is the wildcard hostname for subdomain apps. E.g. *.us.example.com E.g.*--suffix.au.example.com Optional. Does not need to be on the same domain as PathAppURL. |
+
+#### Enumerated Values
+
+| Property | Value(s)                                         |
+|----------|--------------------------------------------------|
+| `status` | `ok`, `unhealthy`, `unreachable`, `unregistered` |
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
+## Create workspace proxy
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X POST http://coder-server:8080/api/v2/workspaceproxies \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`POST /api/v2/workspaceproxies`
+
+> Body parameter
+
+```json
+{
+  "display_name": "string",
+  "icon": "string",
+  "name": "string"
+}
+```
+
+### Parameters
+
+| Name   | In   | Type                                                                                   | Required | Description                    |
+|--------|------|----------------------------------------------------------------------------------------|----------|--------------------------------|
+| `body` | body | [codersdk.CreateWorkspaceProxyRequest](schemas.md#codersdkcreateworkspaceproxyrequest) | true     | Create workspace proxy request |
+
+### Example responses
+
+> 201 Response
+
+```json
+{
+  "created_at": "2019-08-24T14:15:22Z",
+  "deleted": true,
+  "derp_enabled": true,
+  "derp_only": true,
+  "display_name": "string",
+  "healthy": true,
+  "icon_url": "string",
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "name": "string",
+  "path_app_url": "string",
+  "status": {
+    "checked_at": "2019-08-24T14:15:22Z",
+    "report": {
+      "errors": [
+        "string"
+      ],
+      "warnings": [
+        "string"
+      ]
+    },
+    "status": "ok"
+  },
+  "updated_at": "2019-08-24T14:15:22Z",
+  "version": "string",
+  "wildcard_hostname": "string"
+}
+```
+
+### Responses
+
+| Status | Meaning                                                      | Description | Schema                                                       |
+|--------|--------------------------------------------------------------|-------------|--------------------------------------------------------------|
+| 201    | [Created](https://tools.ietf.org/html/rfc7231#section-6.3.2) | Created     | [codersdk.WorkspaceProxy](schemas.md#codersdkworkspaceproxy) |
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
+## Get workspace proxy
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X GET http://coder-server:8080/api/v2/workspaceproxies/{workspaceproxy} \
+  -H 'Accept: application/json' \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`GET /api/v2/workspaceproxies/{workspaceproxy}`
+
+### Parameters
+
+| Name             | In   | Type         | Required | Description      |
+|------------------|------|--------------|----------|------------------|
+| `workspaceproxy` | path | string(uuid) | true     | Proxy ID or name |
+
+### Example responses
+
+> 200 Response
+
+```json
+{
+  "created_at": "2019-08-24T14:15:22Z",
+  "deleted": true,
+  "derp_enabled": true,
+  "derp_only": true,
+  "display_name": "string",
+  "healthy": true,
+  "icon_url": "string",
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "name": "string",
+  "path_app_url": "string",
+  "status": {
+    "checked_at": "2019-08-24T14:15:22Z",
+    "report": {
+      "errors": [
+        "string"
+      ],
+      "warnings": [
+        "string"
+      ]
+    },
+    "status": "ok"
+  },
+  "updated_at": "2019-08-24T14:15:22Z",
+  "version": "string",
+  "wildcard_hostname": "string"
+}
+```
+
+### Responses
+
+| Status | Meaning                                                 | Description | Schema                                                       |
+|--------|---------------------------------------------------------|-------------|--------------------------------------------------------------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.WorkspaceProxy](schemas.md#codersdkworkspaceproxy) |
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
+## Delete workspace proxy
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X DELETE http://coder-server:8080/api/v2/workspaceproxies/{workspaceproxy} \
+  -H 'Accept: application/json' \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`DELETE /api/v2/workspaceproxies/{workspaceproxy}`
+
+### Parameters
+
+| Name             | In   | Type         | Required | Description      |
+|------------------|------|--------------|----------|------------------|
+| `workspaceproxy` | path | string(uuid) | true     | Proxy ID or name |
+
+### Example responses
+
+> 200 Response
+
+```json
+{
+  "detail": "string",
+  "message": "string",
+  "validations": [
+    {
+      "detail": "string",
+      "field": "string"
+    }
+  ]
+}
+```
+
+### Responses
+
+| Status | Meaning                                                 | Description | Schema                                           |
+|--------|---------------------------------------------------------|-------------|--------------------------------------------------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.Response](schemas.md#codersdkresponse) |
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
+## Update workspace proxy
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X PATCH http://coder-server:8080/api/v2/workspaceproxies/{workspaceproxy} \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`PATCH /api/v2/workspaceproxies/{workspaceproxy}`
+
+> Body parameter
+
+```json
+{
+  "display_name": "string",
+  "icon": "string",
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "name": "string",
+  "regenerate_token": true
+}
+```
+
+### Parameters
+
+| Name             | In   | Type                                                                   | Required | Description                    |
+|------------------|------|------------------------------------------------------------------------|----------|--------------------------------|
+| `workspaceproxy` | path | string(uuid)                                                           | true     | Proxy ID or name               |
+| `body`           | body | [codersdk.PatchWorkspaceProxy](schemas.md#codersdkpatchworkspaceproxy) | true     | Update workspace proxy request |
+
+### Example responses
+
+> 200 Response
+
+```json
+{
+  "created_at": "2019-08-24T14:15:22Z",
+  "deleted": true,
+  "derp_enabled": true,
+  "derp_only": true,
+  "display_name": "string",
+  "healthy": true,
+  "icon_url": "string",
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "name": "string",
+  "path_app_url": "string",
+  "status": {
+    "checked_at": "2019-08-24T14:15:22Z",
+    "report": {
+      "errors": [
+        "string"
+      ],
+      "warnings": [
+        "string"
+      ]
+    },
+    "status": "ok"
+  },
+  "updated_at": "2019-08-24T14:15:22Z",
+  "version": "string",
+  "wildcard_hostname": "string"
+}
+```
+
+### Responses
+
+| Status | Meaning                                                 | Description | Schema                                                       |
+|--------|---------------------------------------------------------|-------------|--------------------------------------------------------------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.WorkspaceProxy](schemas.md#codersdkworkspaceproxy) |
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
+## Get workspace external agent credentials
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X GET http://coder-server:8080/api/v2/workspaces/{workspace}/external-agent/{agent}/credentials \
+  -H 'Accept: application/json' \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`GET /api/v2/workspaces/{workspace}/external-agent/{agent}/credentials`
+
+### Parameters
+
+| Name        | In   | Type         | Required | Description  |
+|-------------|------|--------------|----------|--------------|
+| `workspace` | path | string(uuid) | true     | Workspace ID |
+| `agent`     | path | string       | true     | Agent name   |
+
+### Example responses
+
+> 200 Response
+
+```json
+{
+  "agent_token": "string",
+  "command": "string"
+}
+```
+
+### Responses
+
+| Status | Meaning                                                 | Description | Schema                                                                           |
+|--------|---------------------------------------------------------|-------------|----------------------------------------------------------------------------------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.ExternalAgentCredentials](schemas.md#codersdkexternalagentcredentials) |
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
+## OAuth2 authorization request (GET - show authorization page)
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X GET http://coder-server:8080/oauth2/authorize?client_id=string&state=string&response_type=code \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`GET /oauth2/authorize`
+
+### Parameters
+
+| Name            | In    | Type   | Required | Description                       |
+|-----------------|-------|--------|----------|-----------------------------------|
+| `client_id`     | query | string | true     | Client ID                         |
+| `state`         | query | string | true     | A random unguessable string       |
+| `response_type` | query | string | true     | Response type                     |
+| `redirect_uri`  | query | string | false    | Redirect here after authorization |
+| `scope`         | query | string | false    | Token scopes (currently ignored)  |
+
+#### Enumerated Values
+
+| Parameter       | Value(s)        |
+|-----------------|-----------------|
+| `response_type` | `code`, `token` |
+
+### Responses
+
+| Status | Meaning                                                 | Description                     | Schema |
+|--------|---------------------------------------------------------|---------------------------------|--------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | Returns HTML authorization page |        |
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
+## OAuth2 authorization request (POST - process authorization)
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X POST http://coder-server:8080/oauth2/authorize?client_id=string&state=string&response_type=code \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`POST /oauth2/authorize`
+
+### Parameters
+
+| Name            | In    | Type   | Required | Description                       |
+|-----------------|-------|--------|----------|-----------------------------------|
+| `client_id`     | query | string | true     | Client ID                         |
+| `state`         | query | string | true     | A random unguessable string       |
+| `response_type` | query | string | true     | Response type                     |
+| `redirect_uri`  | query | string | false    | Redirect here after authorization |
+| `scope`         | query | string | false    | Token scopes (currently ignored)  |
+
+#### Enumerated Values
+
+| Parameter       | Value(s)        |
+|-----------------|-----------------|
+| `response_type` | `code`, `token` |
+
+### Responses
+
+| Status | Meaning                                                    | Description                              | Schema |
+|--------|------------------------------------------------------------|------------------------------------------|--------|
+| 302    | [Found](https://tools.ietf.org/html/rfc7231#section-6.4.3) | Returns redirect with authorization code |        |
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
+## Get OAuth2 client configuration (RFC 7592)
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X GET http://coder-server:8080/oauth2/clients/{client_id} \
+  -H 'Accept: application/json'
+```
+
+`GET /oauth2/clients/{client_id}`
+
+### Parameters
+
+| Name        | In   | Type   | Required | Description |
+|-------------|------|--------|----------|-------------|
+| `client_id` | path | string | true     | Client ID   |
+
+### Example responses
+
+> 200 Response
+
+```json
+{
+  "client_id": "string",
+  "client_id_issued_at": 0,
+  "client_name": "string",
+  "client_secret_expires_at": 0,
+  "client_uri": "string",
+  "contacts": [
+    "string"
+  ],
+  "grant_types": [
+    "authorization_code"
+  ],
+  "jwks": {},
+  "jwks_uri": "string",
+  "logo_uri": "string",
+  "policy_uri": "string",
+  "redirect_uris": [
+    "string"
+  ],
+  "registration_access_token": "string",
+  "registration_client_uri": "string",
+  "response_types": [
+    "code"
+  ],
+  "scope": "string",
+  "software_id": "string",
+  "software_version": "string",
+  "token_endpoint_auth_method": "client_secret_basic",
+  "tos_uri": "string"
+}
+```
+
+### Responses
+
+| Status | Meaning                                                 | Description | Schema                                                                             |
+|--------|---------------------------------------------------------|-------------|------------------------------------------------------------------------------------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.OAuth2ClientConfiguration](schemas.md#codersdkoauth2clientconfiguration) |
+
+## Update OAuth2 client configuration (RFC 7592)
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X PUT http://coder-server:8080/oauth2/clients/{client_id} \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json'
+```
+
+`PUT /oauth2/clients/{client_id}`
+
+> Body parameter
+
+```json
+{
+  "client_name": "string",
+  "client_uri": "string",
+  "contacts": [
+    "string"
+  ],
+  "grant_types": [
+    "authorization_code"
+  ],
+  "jwks": {},
+  "jwks_uri": "string",
+  "logo_uri": "string",
+  "policy_uri": "string",
+  "redirect_uris": [
+    "string"
+  ],
+  "response_types": [
+    "code"
+  ],
+  "scope": "string",
+  "software_id": "string",
+  "software_statement": "string",
+  "software_version": "string",
+  "token_endpoint_auth_method": "client_secret_basic",
+  "tos_uri": "string"
+}
+```
+
+### Parameters
+
+| Name        | In   | Type                                                                                           | Required | Description           |
+|-------------|------|------------------------------------------------------------------------------------------------|----------|-----------------------|
+| `client_id` | path | string                                                                                         | true     | Client ID             |
+| `body`      | body | [codersdk.OAuth2ClientRegistrationRequest](schemas.md#codersdkoauth2clientregistrationrequest) | true     | Client update request |
+
+### Example responses
+
+> 200 Response
+
+```json
+{
+  "client_id": "string",
+  "client_id_issued_at": 0,
+  "client_name": "string",
+  "client_secret_expires_at": 0,
+  "client_uri": "string",
+  "contacts": [
+    "string"
+  ],
+  "grant_types": [
+    "authorization_code"
+  ],
+  "jwks": {},
+  "jwks_uri": "string",
+  "logo_uri": "string",
+  "policy_uri": "string",
+  "redirect_uris": [
+    "string"
+  ],
+  "registration_access_token": "string",
+  "registration_client_uri": "string",
+  "response_types": [
+    "code"
+  ],
+  "scope": "string",
+  "software_id": "string",
+  "software_version": "string",
+  "token_endpoint_auth_method": "client_secret_basic",
+  "tos_uri": "string"
+}
+```
+
+### Responses
+
+| Status | Meaning                                                 | Description | Schema                                                                             |
+|--------|---------------------------------------------------------|-------------|------------------------------------------------------------------------------------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.OAuth2ClientConfiguration](schemas.md#codersdkoauth2clientconfiguration) |
+
+## Delete OAuth2 client registration (RFC 7592)
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X DELETE http://coder-server:8080/oauth2/clients/{client_id}
+
+```
+
+`DELETE /oauth2/clients/{client_id}`
+
+### Parameters
+
+| Name        | In   | Type   | Required | Description |
+|-------------|------|--------|----------|-------------|
+| `client_id` | path | string | true     | Client ID   |
+
+### Responses
+
+| Status | Meaning                                                         | Description | Schema |
+|--------|-----------------------------------------------------------------|-------------|--------|
+| 204    | [No Content](https://tools.ietf.org/html/rfc7231#section-6.3.5) | No Content  |        |
+
+## OAuth2 dynamic client registration (RFC 7591)
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X POST http://coder-server:8080/oauth2/register \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json'
+```
+
+`POST /oauth2/register`
+
+> Body parameter
+
+```json
+{
+  "client_name": "string",
+  "client_uri": "string",
+  "contacts": [
+    "string"
+  ],
+  "grant_types": [
+    "authorization_code"
+  ],
+  "jwks": {},
+  "jwks_uri": "string",
+  "logo_uri": "string",
+  "policy_uri": "string",
+  "redirect_uris": [
+    "string"
+  ],
+  "response_types": [
+    "code"
+  ],
+  "scope": "string",
+  "software_id": "string",
+  "software_statement": "string",
+  "software_version": "string",
+  "token_endpoint_auth_method": "client_secret_basic",
+  "tos_uri": "string"
+}
+```
+
+### Parameters
+
+| Name   | In   | Type                                                                                           | Required | Description                 |
+|--------|------|------------------------------------------------------------------------------------------------|----------|-----------------------------|
+| `body` | body | [codersdk.OAuth2ClientRegistrationRequest](schemas.md#codersdkoauth2clientregistrationrequest) | true     | Client registration request |
+
+### Example responses
+
+> 201 Response
+
+```json
+{
+  "client_id": "string",
+  "client_id_issued_at": 0,
+  "client_name": "string",
+  "client_secret": "string",
+  "client_secret_expires_at": 0,
+  "client_uri": "string",
+  "contacts": [
+    "string"
+  ],
+  "grant_types": [
+    "authorization_code"
+  ],
+  "jwks": {},
+  "jwks_uri": "string",
+  "logo_uri": "string",
+  "policy_uri": "string",
+  "redirect_uris": [
+    "string"
+  ],
+  "registration_access_token": "string",
+  "registration_client_uri": "string",
+  "response_types": [
+    "code"
+  ],
+  "scope": "string",
+  "software_id": "string",
+  "software_version": "string",
+  "token_endpoint_auth_method": "client_secret_basic",
+  "tos_uri": "string"
+}
+```
+
+### Responses
+
+| Status | Meaning                                                      | Description | Schema                                                                                           |
+|--------|--------------------------------------------------------------|-------------|--------------------------------------------------------------------------------------------------|
+| 201    | [Created](https://tools.ietf.org/html/rfc7231#section-6.3.2) | Created     | [codersdk.OAuth2ClientRegistrationResponse](schemas.md#codersdkoauth2clientregistrationresponse) |
+
+## Revoke OAuth2 tokens (RFC 7009)
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X POST http://coder-server:8080/oauth2/revoke \
+
+```
+
+`POST /oauth2/revoke`
+
+> Body parameter
+
+```yaml
+client_id: string
+token: string
+token_type_hint: string
+
+```
+
+### Parameters
+
+| Name                | In   | Type   | Required | Description                                           |
+|---------------------|------|--------|----------|-------------------------------------------------------|
+| `body`              | body | object | true     |                                                       |
+| `» client_id`       | body | string | true     | Client ID for authentication                          |
+| `» token`           | body | string | true     | The token to revoke                                   |
+| `» token_type_hint` | body | string | false    | Hint about token type (access_token or refresh_token) |
+
+### Responses
+
+| Status | Meaning                                                 | Description                | Schema |
+|--------|---------------------------------------------------------|----------------------------|--------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | Token successfully revoked |        |
+
+## OAuth2 token exchange
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X POST http://coder-server:8080/oauth2/tokens \
+  -H 'Accept: application/json'
+```
+
+`POST /oauth2/tokens`
+
+> Body parameter
+
+```yaml
+client_id: string
+client_secret: string
+code: string
+refresh_token: string
+grant_type: authorization_code
+
+```
+
+### Parameters
+
+| Name              | In   | Type   | Required | Description                                                   |
+|-------------------|------|--------|----------|---------------------------------------------------------------|
+| `body`            | body | object | false    |                                                               |
+| `» client_id`     | body | string | false    | Client ID, required if grant_type=authorization_code          |
+| `» client_secret` | body | string | false    | Client secret, required if grant_type=authorization_code      |
+| `» code`          | body | string | false    | Authorization code, required if grant_type=authorization_code |
+| `» refresh_token` | body | string | false    | Refresh token, required if grant_type=refresh_token           |
+| `» grant_type`    | body | string | true     | Grant type                                                    |
+
+#### Enumerated Values
+
+| Parameter      | Value(s)                                                                            |
+|----------------|-------------------------------------------------------------------------------------|
+| `» grant_type` | `authorization_code`, `client_credentials`, `implicit`, `password`, `refresh_token` |
+
+### Example responses
+
+> 200 Response
+
+```json
+{
+  "access_token": "string",
+  "expires_in": 0,
+  "expiry": "string",
+  "refresh_token": "string",
+  "token_type": "string"
+}
+```
+
+### Responses
+
+| Status | Meaning                                                 | Description | Schema                                 |
+|--------|---------------------------------------------------------|-------------|----------------------------------------|
+| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [oauth2.Token](schemas.md#oauth2token) |
+
+## Delete OAuth2 application tokens
+
+### Code samples
+
+```shell
+# Example request using curl
+curl -X DELETE http://coder-server:8080/oauth2/tokens?client_id=string \
+  -H 'Coder-Session-Token: API_KEY'
+```
+
+`DELETE /oauth2/tokens`
+
+### Parameters
+
+| Name        | In    | Type   | Required | Description |
+|-------------|-------|--------|----------|-------------|
+| `client_id` | query | string | true     | Client ID   |
+
+### Responses
+
+| Status | Meaning                                                         | Description | Schema |
+|--------|-----------------------------------------------------------------|-------------|--------|
+| 204    | [No Content](https://tools.ietf.org/html/rfc7231#section-6.3.5) | No Content  |        |
+
+To perform this operation, you must be authenticated. [Learn more](authentication.md).
+
 ## SCIM 2.0: Service Provider Config
 
 ### Code samples
 
 ```shell
 # Example request using curl
-curl -X GET http://coder-server:8080/api/v2/scim/v2/ServiceProviderConfig
+curl -X GET http://coder-server:8080/scim/v2/ServiceProviderConfig
 
 ```
 
@@ -2888,7 +4343,7 @@ curl -X GET http://coder-server:8080/api/v2/scim/v2/ServiceProviderConfig
 
 ```shell
 # Example request using curl
-curl -X GET http://coder-server:8080/api/v2/scim/v2/Users \
+curl -X GET http://coder-server:8080/scim/v2/Users \
   -H 'Authorizaiton: API_KEY'
 ```
 
@@ -2908,7 +4363,7 @@ To perform this operation, you must be authenticated. [Learn more](authenticatio
 
 ```shell
 # Example request using curl
-curl -X POST http://coder-server:8080/api/v2/scim/v2/Users \
+curl -X POST http://coder-server:8080/scim/v2/Users \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json' \
   -H 'Authorizaiton: API_KEY'
@@ -3000,7 +4455,7 @@ To perform this operation, you must be authenticated. [Learn more](authenticatio
 
 ```shell
 # Example request using curl
-curl -X GET http://coder-server:8080/api/v2/scim/v2/Users/{id} \
+curl -X GET http://coder-server:8080/scim/v2/Users/{id} \
   -H 'Authorizaiton: API_KEY'
 ```
 
@@ -3026,7 +4481,7 @@ To perform this operation, you must be authenticated. [Learn more](authenticatio
 
 ```shell
 # Example request using curl
-curl -X PUT http://coder-server:8080/api/v2/scim/v2/Users/{id} \
+curl -X PUT http://coder-server:8080/scim/v2/Users/{id} \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/scim+json' \
   -H 'Authorizaiton: API_KEY'
@@ -3081,7 +4536,9 @@ curl -X PUT http://coder-server:8080/api/v2/scim/v2/Users/{id} \
   "avatar_url": "http://example.com",
   "created_at": "2019-08-24T14:15:22Z",
   "email": "user@example.com",
+  "has_ai_seat": true,
   "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "is_service_account": true,
   "last_seen_at": "2019-08-24T14:15:22Z",
   "login_type": "",
   "name": "string",
@@ -3116,7 +4573,7 @@ To perform this operation, you must be authenticated. [Learn more](authenticatio
 
 ```shell
 # Example request using curl
-curl -X PATCH http://coder-server:8080/api/v2/scim/v2/Users/{id} \
+curl -X PATCH http://coder-server:8080/scim/v2/Users/{id} \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/scim+json' \
   -H 'Authorizaiton: API_KEY'
@@ -3171,7 +4628,9 @@ curl -X PATCH http://coder-server:8080/api/v2/scim/v2/Users/{id} \
   "avatar_url": "http://example.com",
   "created_at": "2019-08-24T14:15:22Z",
   "email": "user@example.com",
+  "has_ai_seat": true,
   "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "is_service_account": true,
   "last_seen_at": "2019-08-24T14:15:22Z",
   "login_type": "",
   "name": "string",
@@ -3197,1145 +4656,5 @@ curl -X PATCH http://coder-server:8080/api/v2/scim/v2/Users/{id} \
 | Status | Meaning                                                 | Description | Schema                                   |
 |--------|---------------------------------------------------------|-------------|------------------------------------------|
 | 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.User](schemas.md#codersdkuser) |
-
-To perform this operation, you must be authenticated. [Learn more](authentication.md).
-
-## Get the available idp sync claim fields
-
-### Code samples
-
-```shell
-# Example request using curl
-curl -X GET http://coder-server:8080/api/v2/settings/idpsync/available-fields \
-  -H 'Accept: application/json' \
-  -H 'Coder-Session-Token: API_KEY'
-```
-
-`GET /settings/idpsync/available-fields`
-
-### Parameters
-
-| Name           | In   | Type         | Required | Description     |
-|----------------|------|--------------|----------|-----------------|
-| `organization` | path | string(uuid) | true     | Organization ID |
-
-### Example responses
-
-> 200 Response
-
-```json
-[
-  "string"
-]
-```
-
-### Responses
-
-| Status | Meaning                                                 | Description | Schema          |
-|--------|---------------------------------------------------------|-------------|-----------------|
-| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | array of string |
-
-<h3 id="get-the-available-idp-sync-claim-fields-responseschema">Response Schema</h3>
-
-To perform this operation, you must be authenticated. [Learn more](authentication.md).
-
-## Get the idp sync claim field values
-
-### Code samples
-
-```shell
-# Example request using curl
-curl -X GET http://coder-server:8080/api/v2/settings/idpsync/field-values?claimField=string \
-  -H 'Accept: application/json' \
-  -H 'Coder-Session-Token: API_KEY'
-```
-
-`GET /settings/idpsync/field-values`
-
-### Parameters
-
-| Name           | In    | Type           | Required | Description     |
-|----------------|-------|----------------|----------|-----------------|
-| `organization` | path  | string(uuid)   | true     | Organization ID |
-| `claimField`   | query | string(string) | true     | Claim Field     |
-
-### Example responses
-
-> 200 Response
-
-```json
-[
-  "string"
-]
-```
-
-### Responses
-
-| Status | Meaning                                                 | Description | Schema          |
-|--------|---------------------------------------------------------|-------------|-----------------|
-| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | array of string |
-
-<h3 id="get-the-idp-sync-claim-field-values-responseschema">Response Schema</h3>
-
-To perform this operation, you must be authenticated. [Learn more](authentication.md).
-
-## Get organization IdP Sync settings
-
-### Code samples
-
-```shell
-# Example request using curl
-curl -X GET http://coder-server:8080/api/v2/settings/idpsync/organization \
-  -H 'Accept: application/json' \
-  -H 'Coder-Session-Token: API_KEY'
-```
-
-`GET /settings/idpsync/organization`
-
-### Example responses
-
-> 200 Response
-
-```json
-{
-  "field": "string",
-  "mapping": {
-    "property1": [
-      "string"
-    ],
-    "property2": [
-      "string"
-    ]
-  },
-  "organization_assign_default": true
-}
-```
-
-### Responses
-
-| Status | Meaning                                                 | Description | Schema                                                                           |
-|--------|---------------------------------------------------------|-------------|----------------------------------------------------------------------------------|
-| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.OrganizationSyncSettings](schemas.md#codersdkorganizationsyncsettings) |
-
-To perform this operation, you must be authenticated. [Learn more](authentication.md).
-
-## Update organization IdP Sync settings
-
-### Code samples
-
-```shell
-# Example request using curl
-curl -X PATCH http://coder-server:8080/api/v2/settings/idpsync/organization \
-  -H 'Content-Type: application/json' \
-  -H 'Accept: application/json' \
-  -H 'Coder-Session-Token: API_KEY'
-```
-
-`PATCH /settings/idpsync/organization`
-
-> Body parameter
-
-```json
-{
-  "field": "string",
-  "mapping": {
-    "property1": [
-      "string"
-    ],
-    "property2": [
-      "string"
-    ]
-  },
-  "organization_assign_default": true
-}
-```
-
-### Parameters
-
-| Name   | In   | Type                                                                             | Required | Description  |
-|--------|------|----------------------------------------------------------------------------------|----------|--------------|
-| `body` | body | [codersdk.OrganizationSyncSettings](schemas.md#codersdkorganizationsyncsettings) | true     | New settings |
-
-### Example responses
-
-> 200 Response
-
-```json
-{
-  "field": "string",
-  "mapping": {
-    "property1": [
-      "string"
-    ],
-    "property2": [
-      "string"
-    ]
-  },
-  "organization_assign_default": true
-}
-```
-
-### Responses
-
-| Status | Meaning                                                 | Description | Schema                                                                           |
-|--------|---------------------------------------------------------|-------------|----------------------------------------------------------------------------------|
-| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.OrganizationSyncSettings](schemas.md#codersdkorganizationsyncsettings) |
-
-To perform this operation, you must be authenticated. [Learn more](authentication.md).
-
-## Update organization IdP Sync config
-
-### Code samples
-
-```shell
-# Example request using curl
-curl -X PATCH http://coder-server:8080/api/v2/settings/idpsync/organization/config \
-  -H 'Content-Type: application/json' \
-  -H 'Accept: application/json' \
-  -H 'Coder-Session-Token: API_KEY'
-```
-
-`PATCH /settings/idpsync/organization/config`
-
-> Body parameter
-
-```json
-{
-  "assign_default": true,
-  "field": "string"
-}
-```
-
-### Parameters
-
-| Name   | In   | Type                                                                                                       | Required | Description       |
-|--------|------|------------------------------------------------------------------------------------------------------------|----------|-------------------|
-| `body` | body | [codersdk.PatchOrganizationIDPSyncConfigRequest](schemas.md#codersdkpatchorganizationidpsyncconfigrequest) | true     | New config values |
-
-### Example responses
-
-> 200 Response
-
-```json
-{
-  "field": "string",
-  "mapping": {
-    "property1": [
-      "string"
-    ],
-    "property2": [
-      "string"
-    ]
-  },
-  "organization_assign_default": true
-}
-```
-
-### Responses
-
-| Status | Meaning                                                 | Description | Schema                                                                           |
-|--------|---------------------------------------------------------|-------------|----------------------------------------------------------------------------------|
-| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.OrganizationSyncSettings](schemas.md#codersdkorganizationsyncsettings) |
-
-To perform this operation, you must be authenticated. [Learn more](authentication.md).
-
-## Update organization IdP Sync mapping
-
-### Code samples
-
-```shell
-# Example request using curl
-curl -X PATCH http://coder-server:8080/api/v2/settings/idpsync/organization/mapping \
-  -H 'Content-Type: application/json' \
-  -H 'Accept: application/json' \
-  -H 'Coder-Session-Token: API_KEY'
-```
-
-`PATCH /settings/idpsync/organization/mapping`
-
-> Body parameter
-
-```json
-{
-  "add": [
-    {
-      "gets": "string",
-      "given": "string"
-    }
-  ],
-  "remove": [
-    {
-      "gets": "string",
-      "given": "string"
-    }
-  ]
-}
-```
-
-### Parameters
-
-| Name   | In   | Type                                                                                                         | Required | Description                                   |
-|--------|------|--------------------------------------------------------------------------------------------------------------|----------|-----------------------------------------------|
-| `body` | body | [codersdk.PatchOrganizationIDPSyncMappingRequest](schemas.md#codersdkpatchorganizationidpsyncmappingrequest) | true     | Description of the mappings to add and remove |
-
-### Example responses
-
-> 200 Response
-
-```json
-{
-  "field": "string",
-  "mapping": {
-    "property1": [
-      "string"
-    ],
-    "property2": [
-      "string"
-    ]
-  },
-  "organization_assign_default": true
-}
-```
-
-### Responses
-
-| Status | Meaning                                                 | Description | Schema                                                                           |
-|--------|---------------------------------------------------------|-------------|----------------------------------------------------------------------------------|
-| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.OrganizationSyncSettings](schemas.md#codersdkorganizationsyncsettings) |
-
-To perform this operation, you must be authenticated. [Learn more](authentication.md).
-
-## Get template ACLs
-
-### Code samples
-
-```shell
-# Example request using curl
-curl -X GET http://coder-server:8080/api/v2/templates/{template}/acl \
-  -H 'Accept: application/json' \
-  -H 'Coder-Session-Token: API_KEY'
-```
-
-`GET /templates/{template}/acl`
-
-### Parameters
-
-| Name       | In   | Type         | Required | Description |
-|------------|------|--------------|----------|-------------|
-| `template` | path | string(uuid) | true     | Template ID |
-
-### Example responses
-
-> 200 Response
-
-```json
-{
-  "group": [
-    {
-      "avatar_url": "http://example.com",
-      "display_name": "string",
-      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
-      "members": [
-        {
-          "avatar_url": "http://example.com",
-          "created_at": "2019-08-24T14:15:22Z",
-          "email": "user@example.com",
-          "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
-          "last_seen_at": "2019-08-24T14:15:22Z",
-          "login_type": "",
-          "name": "string",
-          "status": "active",
-          "theme_preference": "string",
-          "updated_at": "2019-08-24T14:15:22Z",
-          "username": "string"
-        }
-      ],
-      "name": "string",
-      "organization_display_name": "string",
-      "organization_id": "7c60d51f-b44e-4682-87d6-449835ea4de6",
-      "organization_name": "string",
-      "quota_allowance": 0,
-      "role": "admin",
-      "source": "user",
-      "total_member_count": 0
-    }
-  ],
-  "users": [
-    {
-      "avatar_url": "http://example.com",
-      "created_at": "2019-08-24T14:15:22Z",
-      "email": "user@example.com",
-      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
-      "last_seen_at": "2019-08-24T14:15:22Z",
-      "login_type": "",
-      "name": "string",
-      "organization_ids": [
-        "497f6eca-6276-4993-bfeb-53cbbbba6f08"
-      ],
-      "role": "admin",
-      "roles": [
-        {
-          "display_name": "string",
-          "name": "string",
-          "organization_id": "string"
-        }
-      ],
-      "status": "active",
-      "theme_preference": "string",
-      "updated_at": "2019-08-24T14:15:22Z",
-      "username": "string"
-    }
-  ]
-}
-```
-
-### Responses
-
-| Status | Meaning                                                 | Description | Schema                                                 |
-|--------|---------------------------------------------------------|-------------|--------------------------------------------------------|
-| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.TemplateACL](schemas.md#codersdktemplateacl) |
-
-To perform this operation, you must be authenticated. [Learn more](authentication.md).
-
-## Update template ACL
-
-### Code samples
-
-```shell
-# Example request using curl
-curl -X PATCH http://coder-server:8080/api/v2/templates/{template}/acl \
-  -H 'Content-Type: application/json' \
-  -H 'Accept: application/json' \
-  -H 'Coder-Session-Token: API_KEY'
-```
-
-`PATCH /templates/{template}/acl`
-
-> Body parameter
-
-```json
-{
-  "group_perms": {
-    "8bd26b20-f3e8-48be-a903-46bb920cf671": "use",
-    "<group_id>": "admin"
-  },
-  "user_perms": {
-    "4df59e74-c027-470b-ab4d-cbba8963a5e9": "use",
-    "<user_id>": "admin"
-  }
-}
-```
-
-### Parameters
-
-| Name       | In   | Type                                                               | Required | Description                 |
-|------------|------|--------------------------------------------------------------------|----------|-----------------------------|
-| `template` | path | string(uuid)                                                       | true     | Template ID                 |
-| `body`     | body | [codersdk.UpdateTemplateACL](schemas.md#codersdkupdatetemplateacl) | true     | Update template ACL request |
-
-### Example responses
-
-> 200 Response
-
-```json
-{
-  "detail": "string",
-  "message": "string",
-  "validations": [
-    {
-      "detail": "string",
-      "field": "string"
-    }
-  ]
-}
-```
-
-### Responses
-
-| Status | Meaning                                                 | Description | Schema                                           |
-|--------|---------------------------------------------------------|-------------|--------------------------------------------------|
-| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.Response](schemas.md#codersdkresponse) |
-
-To perform this operation, you must be authenticated. [Learn more](authentication.md).
-
-## Get template available acl users/groups
-
-### Code samples
-
-```shell
-# Example request using curl
-curl -X GET http://coder-server:8080/api/v2/templates/{template}/acl/available \
-  -H 'Accept: application/json' \
-  -H 'Coder-Session-Token: API_KEY'
-```
-
-`GET /templates/{template}/acl/available`
-
-### Parameters
-
-| Name       | In   | Type         | Required | Description |
-|------------|------|--------------|----------|-------------|
-| `template` | path | string(uuid) | true     | Template ID |
-
-### Example responses
-
-> 200 Response
-
-```json
-[
-  {
-    "groups": [
-      {
-        "avatar_url": "http://example.com",
-        "display_name": "string",
-        "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
-        "members": [
-          {
-            "avatar_url": "http://example.com",
-            "created_at": "2019-08-24T14:15:22Z",
-            "email": "user@example.com",
-            "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
-            "last_seen_at": "2019-08-24T14:15:22Z",
-            "login_type": "",
-            "name": "string",
-            "status": "active",
-            "theme_preference": "string",
-            "updated_at": "2019-08-24T14:15:22Z",
-            "username": "string"
-          }
-        ],
-        "name": "string",
-        "organization_display_name": "string",
-        "organization_id": "7c60d51f-b44e-4682-87d6-449835ea4de6",
-        "organization_name": "string",
-        "quota_allowance": 0,
-        "source": "user",
-        "total_member_count": 0
-      }
-    ],
-    "users": [
-      {
-        "avatar_url": "http://example.com",
-        "created_at": "2019-08-24T14:15:22Z",
-        "email": "user@example.com",
-        "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
-        "last_seen_at": "2019-08-24T14:15:22Z",
-        "login_type": "",
-        "name": "string",
-        "status": "active",
-        "theme_preference": "string",
-        "updated_at": "2019-08-24T14:15:22Z",
-        "username": "string"
-      }
-    ]
-  }
-]
-```
-
-### Responses
-
-| Status | Meaning                                                 | Description | Schema                                                            |
-|--------|---------------------------------------------------------|-------------|-------------------------------------------------------------------|
-| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | array of [codersdk.ACLAvailable](schemas.md#codersdkaclavailable) |
-
-<h3 id="get-template-available-acl-users/groups-responseschema">Response Schema</h3>
-
-Status Code **200**
-
-| Name                           | Type                                                   | Required | Restrictions | Description                                                                                                                                                           |
-|--------------------------------|--------------------------------------------------------|----------|--------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `[array item]`                 | array                                                  | false    |              |                                                                                                                                                                       |
-| `» groups`                     | array                                                  | false    |              |                                                                                                                                                                       |
-| `»» avatar_url`                | string(uri)                                            | false    |              |                                                                                                                                                                       |
-| `»» display_name`              | string                                                 | false    |              |                                                                                                                                                                       |
-| `»» id`                        | string(uuid)                                           | false    |              |                                                                                                                                                                       |
-| `»» members`                   | array                                                  | false    |              |                                                                                                                                                                       |
-| `»»» avatar_url`               | string(uri)                                            | false    |              |                                                                                                                                                                       |
-| `»»» created_at`               | string(date-time)                                      | true     |              |                                                                                                                                                                       |
-| `»»» email`                    | string(email)                                          | true     |              |                                                                                                                                                                       |
-| `»»» id`                       | string(uuid)                                           | true     |              |                                                                                                                                                                       |
-| `»»» last_seen_at`             | string(date-time)                                      | false    |              |                                                                                                                                                                       |
-| `»»» login_type`               | [codersdk.LoginType](schemas.md#codersdklogintype)     | false    |              |                                                                                                                                                                       |
-| `»»» name`                     | string                                                 | false    |              |                                                                                                                                                                       |
-| `»»» status`                   | [codersdk.UserStatus](schemas.md#codersdkuserstatus)   | false    |              |                                                                                                                                                                       |
-| `»»» theme_preference`         | string                                                 | false    |              | Deprecated: this value should be retrieved from `codersdk.UserPreferenceSettings` instead.                                                                            |
-| `»»» updated_at`               | string(date-time)                                      | false    |              |                                                                                                                                                                       |
-| `»»» username`                 | string                                                 | true     |              |                                                                                                                                                                       |
-| `»» name`                      | string                                                 | false    |              |                                                                                                                                                                       |
-| `»» organization_display_name` | string                                                 | false    |              |                                                                                                                                                                       |
-| `»» organization_id`           | string(uuid)                                           | false    |              |                                                                                                                                                                       |
-| `»» organization_name`         | string                                                 | false    |              |                                                                                                                                                                       |
-| `»» quota_allowance`           | integer                                                | false    |              |                                                                                                                                                                       |
-| `»» source`                    | [codersdk.GroupSource](schemas.md#codersdkgroupsource) | false    |              |                                                                                                                                                                       |
-| `»» total_member_count`        | integer                                                | false    |              | How many members are in this group. Shows the total count, even if the user is not authorized to read group member details. May be greater than `len(Group.Members)`. |
-| `» users`                      | array                                                  | false    |              |                                                                                                                                                                       |
-
-#### Enumerated Values
-
-| Property     | Value       |
-|--------------|-------------|
-| `login_type` | ``          |
-| `login_type` | `password`  |
-| `login_type` | `github`    |
-| `login_type` | `oidc`      |
-| `login_type` | `token`     |
-| `login_type` | `none`      |
-| `status`     | `active`    |
-| `status`     | `suspended` |
-| `source`     | `user`      |
-| `source`     | `oidc`      |
-
-To perform this operation, you must be authenticated. [Learn more](authentication.md).
-
-## Get user quiet hours schedule
-
-### Code samples
-
-```shell
-# Example request using curl
-curl -X GET http://coder-server:8080/api/v2/users/{user}/quiet-hours \
-  -H 'Accept: application/json' \
-  -H 'Coder-Session-Token: API_KEY'
-```
-
-`GET /users/{user}/quiet-hours`
-
-### Parameters
-
-| Name   | In   | Type         | Required | Description |
-|--------|------|--------------|----------|-------------|
-| `user` | path | string(uuid) | true     | User ID     |
-
-### Example responses
-
-> 200 Response
-
-```json
-[
-  {
-    "next": "2019-08-24T14:15:22Z",
-    "raw_schedule": "string",
-    "time": "string",
-    "timezone": "string",
-    "user_can_set": true,
-    "user_set": true
-  }
-]
-```
-
-### Responses
-
-| Status | Meaning                                                 | Description | Schema                                                                                                |
-|--------|---------------------------------------------------------|-------------|-------------------------------------------------------------------------------------------------------|
-| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | array of [codersdk.UserQuietHoursScheduleResponse](schemas.md#codersdkuserquiethoursscheduleresponse) |
-
-<h3 id="get-user-quiet-hours-schedule-responseschema">Response Schema</h3>
-
-Status Code **200**
-
-| Name             | Type              | Required | Restrictions | Description                                                                                                                                                                      |
-|------------------|-------------------|----------|--------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `[array item]`   | array             | false    |              |                                                                                                                                                                                  |
-| `» next`         | string(date-time) | false    |              | Next is the next time that the quiet hours window will start.                                                                                                                    |
-| `» raw_schedule` | string            | false    |              |                                                                                                                                                                                  |
-| `» time`         | string            | false    |              | Time is the time of day that the quiet hours window starts in the given Timezone each day.                                                                                       |
-| `» timezone`     | string            | false    |              | raw format from the cron expression, UTC if unspecified                                                                                                                          |
-| `» user_can_set` | boolean           | false    |              | User can set is true if the user is allowed to set their own quiet hours schedule. If false, the user cannot set a custom schedule and the default schedule will always be used. |
-| `» user_set`     | boolean           | false    |              | User set is true if the user has set their own quiet hours schedule. If false, the user is using the default schedule.                                                           |
-
-To perform this operation, you must be authenticated. [Learn more](authentication.md).
-
-## Update user quiet hours schedule
-
-### Code samples
-
-```shell
-# Example request using curl
-curl -X PUT http://coder-server:8080/api/v2/users/{user}/quiet-hours \
-  -H 'Content-Type: application/json' \
-  -H 'Accept: application/json' \
-  -H 'Coder-Session-Token: API_KEY'
-```
-
-`PUT /users/{user}/quiet-hours`
-
-> Body parameter
-
-```json
-{
-  "schedule": "string"
-}
-```
-
-### Parameters
-
-| Name   | In   | Type                                                                                                   | Required | Description             |
-|--------|------|--------------------------------------------------------------------------------------------------------|----------|-------------------------|
-| `user` | path | string(uuid)                                                                                           | true     | User ID                 |
-| `body` | body | [codersdk.UpdateUserQuietHoursScheduleRequest](schemas.md#codersdkupdateuserquiethoursschedulerequest) | true     | Update schedule request |
-
-### Example responses
-
-> 200 Response
-
-```json
-[
-  {
-    "next": "2019-08-24T14:15:22Z",
-    "raw_schedule": "string",
-    "time": "string",
-    "timezone": "string",
-    "user_can_set": true,
-    "user_set": true
-  }
-]
-```
-
-### Responses
-
-| Status | Meaning                                                 | Description | Schema                                                                                                |
-|--------|---------------------------------------------------------|-------------|-------------------------------------------------------------------------------------------------------|
-| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | array of [codersdk.UserQuietHoursScheduleResponse](schemas.md#codersdkuserquiethoursscheduleresponse) |
-
-<h3 id="update-user-quiet-hours-schedule-responseschema">Response Schema</h3>
-
-Status Code **200**
-
-| Name             | Type              | Required | Restrictions | Description                                                                                                                                                                      |
-|------------------|-------------------|----------|--------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `[array item]`   | array             | false    |              |                                                                                                                                                                                  |
-| `» next`         | string(date-time) | false    |              | Next is the next time that the quiet hours window will start.                                                                                                                    |
-| `» raw_schedule` | string            | false    |              |                                                                                                                                                                                  |
-| `» time`         | string            | false    |              | Time is the time of day that the quiet hours window starts in the given Timezone each day.                                                                                       |
-| `» timezone`     | string            | false    |              | raw format from the cron expression, UTC if unspecified                                                                                                                          |
-| `» user_can_set` | boolean           | false    |              | User can set is true if the user is allowed to set their own quiet hours schedule. If false, the user cannot set a custom schedule and the default schedule will always be used. |
-| `» user_set`     | boolean           | false    |              | User set is true if the user has set their own quiet hours schedule. If false, the user is using the default schedule.                                                           |
-
-To perform this operation, you must be authenticated. [Learn more](authentication.md).
-
-## Get workspace quota by user deprecated
-
-### Code samples
-
-```shell
-# Example request using curl
-curl -X GET http://coder-server:8080/api/v2/workspace-quota/{user} \
-  -H 'Accept: application/json' \
-  -H 'Coder-Session-Token: API_KEY'
-```
-
-`GET /workspace-quota/{user}`
-
-### Parameters
-
-| Name   | In   | Type   | Required | Description          |
-|--------|------|--------|----------|----------------------|
-| `user` | path | string | true     | User ID, name, or me |
-
-### Example responses
-
-> 200 Response
-
-```json
-{
-  "budget": 0,
-  "credits_consumed": 0
-}
-```
-
-### Responses
-
-| Status | Meaning                                                 | Description | Schema                                                       |
-|--------|---------------------------------------------------------|-------------|--------------------------------------------------------------|
-| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.WorkspaceQuota](schemas.md#codersdkworkspacequota) |
-
-To perform this operation, you must be authenticated. [Learn more](authentication.md).
-
-## Get workspace proxies
-
-### Code samples
-
-```shell
-# Example request using curl
-curl -X GET http://coder-server:8080/api/v2/workspaceproxies \
-  -H 'Accept: application/json' \
-  -H 'Coder-Session-Token: API_KEY'
-```
-
-`GET /workspaceproxies`
-
-### Example responses
-
-> 200 Response
-
-```json
-[
-  {
-    "regions": [
-      {
-        "created_at": "2019-08-24T14:15:22Z",
-        "deleted": true,
-        "derp_enabled": true,
-        "derp_only": true,
-        "display_name": "string",
-        "healthy": true,
-        "icon_url": "string",
-        "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
-        "name": "string",
-        "path_app_url": "string",
-        "status": {
-          "checked_at": "2019-08-24T14:15:22Z",
-          "report": {
-            "errors": [
-              "string"
-            ],
-            "warnings": [
-              "string"
-            ]
-          },
-          "status": "ok"
-        },
-        "updated_at": "2019-08-24T14:15:22Z",
-        "version": "string",
-        "wildcard_hostname": "string"
-      }
-    ]
-  }
-]
-```
-
-### Responses
-
-| Status | Meaning                                                 | Description | Schema                                                                                                                  |
-|--------|---------------------------------------------------------|-------------|-------------------------------------------------------------------------------------------------------------------------|
-| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | array of [codersdk.RegionsResponse-codersdk_WorkspaceProxy](schemas.md#codersdkregionsresponse-codersdk_workspaceproxy) |
-
-<h3 id="get-workspace-proxies-responseschema">Response Schema</h3>
-
-Status Code **200**
-
-| Name                   | Type                                                                     | Required | Restrictions | Description                                                                                                                                                                       |
-|------------------------|--------------------------------------------------------------------------|----------|--------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `[array item]`         | array                                                                    | false    |              |                                                                                                                                                                                   |
-| `» regions`            | array                                                                    | false    |              |                                                                                                                                                                                   |
-| `»» created_at`        | string(date-time)                                                        | false    |              |                                                                                                                                                                                   |
-| `»» deleted`           | boolean                                                                  | false    |              |                                                                                                                                                                                   |
-| `»» derp_enabled`      | boolean                                                                  | false    |              |                                                                                                                                                                                   |
-| `»» derp_only`         | boolean                                                                  | false    |              |                                                                                                                                                                                   |
-| `»» display_name`      | string                                                                   | false    |              |                                                                                                                                                                                   |
-| `»» healthy`           | boolean                                                                  | false    |              |                                                                                                                                                                                   |
-| `»» icon_url`          | string                                                                   | false    |              |                                                                                                                                                                                   |
-| `»» id`                | string(uuid)                                                             | false    |              |                                                                                                                                                                                   |
-| `»» name`              | string                                                                   | false    |              |                                                                                                                                                                                   |
-| `»» path_app_url`      | string                                                                   | false    |              | Path app URL is the URL to the base path for path apps. Optional unless wildcard_hostname is set. E.g. https://us.example.com                                                     |
-| `»» status`            | [codersdk.WorkspaceProxyStatus](schemas.md#codersdkworkspaceproxystatus) | false    |              | Status is the latest status check of the proxy. This will be empty for deleted proxies. This value can be used to determine if a workspace proxy is healthy and ready to use.     |
-| `»»» checked_at`       | string(date-time)                                                        | false    |              |                                                                                                                                                                                   |
-| `»»» report`           | [codersdk.ProxyHealthReport](schemas.md#codersdkproxyhealthreport)       | false    |              | Report provides more information about the health of the workspace proxy.                                                                                                         |
-| `»»»» errors`          | array                                                                    | false    |              | Errors are problems that prevent the workspace proxy from being healthy                                                                                                           |
-| `»»»» warnings`        | array                                                                    | false    |              | Warnings do not prevent the workspace proxy from being healthy, but should be addressed.                                                                                          |
-| `»»» status`           | [codersdk.ProxyHealthStatus](schemas.md#codersdkproxyhealthstatus)       | false    |              |                                                                                                                                                                                   |
-| `»» updated_at`        | string(date-time)                                                        | false    |              |                                                                                                                                                                                   |
-| `»» version`           | string                                                                   | false    |              |                                                                                                                                                                                   |
-| `»» wildcard_hostname` | string                                                                   | false    |              | Wildcard hostname is the wildcard hostname for subdomain apps. E.g. *.us.example.com E.g.*--suffix.au.example.com Optional. Does not need to be on the same domain as PathAppURL. |
-
-#### Enumerated Values
-
-| Property | Value          |
-|----------|----------------|
-| `status` | `ok`           |
-| `status` | `unreachable`  |
-| `status` | `unhealthy`    |
-| `status` | `unregistered` |
-
-To perform this operation, you must be authenticated. [Learn more](authentication.md).
-
-## Create workspace proxy
-
-### Code samples
-
-```shell
-# Example request using curl
-curl -X POST http://coder-server:8080/api/v2/workspaceproxies \
-  -H 'Content-Type: application/json' \
-  -H 'Accept: application/json' \
-  -H 'Coder-Session-Token: API_KEY'
-```
-
-`POST /workspaceproxies`
-
-> Body parameter
-
-```json
-{
-  "display_name": "string",
-  "icon": "string",
-  "name": "string"
-}
-```
-
-### Parameters
-
-| Name   | In   | Type                                                                                   | Required | Description                    |
-|--------|------|----------------------------------------------------------------------------------------|----------|--------------------------------|
-| `body` | body | [codersdk.CreateWorkspaceProxyRequest](schemas.md#codersdkcreateworkspaceproxyrequest) | true     | Create workspace proxy request |
-
-### Example responses
-
-> 201 Response
-
-```json
-{
-  "created_at": "2019-08-24T14:15:22Z",
-  "deleted": true,
-  "derp_enabled": true,
-  "derp_only": true,
-  "display_name": "string",
-  "healthy": true,
-  "icon_url": "string",
-  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
-  "name": "string",
-  "path_app_url": "string",
-  "status": {
-    "checked_at": "2019-08-24T14:15:22Z",
-    "report": {
-      "errors": [
-        "string"
-      ],
-      "warnings": [
-        "string"
-      ]
-    },
-    "status": "ok"
-  },
-  "updated_at": "2019-08-24T14:15:22Z",
-  "version": "string",
-  "wildcard_hostname": "string"
-}
-```
-
-### Responses
-
-| Status | Meaning                                                      | Description | Schema                                                       |
-|--------|--------------------------------------------------------------|-------------|--------------------------------------------------------------|
-| 201    | [Created](https://tools.ietf.org/html/rfc7231#section-6.3.2) | Created     | [codersdk.WorkspaceProxy](schemas.md#codersdkworkspaceproxy) |
-
-To perform this operation, you must be authenticated. [Learn more](authentication.md).
-
-## Get workspace proxy
-
-### Code samples
-
-```shell
-# Example request using curl
-curl -X GET http://coder-server:8080/api/v2/workspaceproxies/{workspaceproxy} \
-  -H 'Accept: application/json' \
-  -H 'Coder-Session-Token: API_KEY'
-```
-
-`GET /workspaceproxies/{workspaceproxy}`
-
-### Parameters
-
-| Name             | In   | Type         | Required | Description      |
-|------------------|------|--------------|----------|------------------|
-| `workspaceproxy` | path | string(uuid) | true     | Proxy ID or name |
-
-### Example responses
-
-> 200 Response
-
-```json
-{
-  "created_at": "2019-08-24T14:15:22Z",
-  "deleted": true,
-  "derp_enabled": true,
-  "derp_only": true,
-  "display_name": "string",
-  "healthy": true,
-  "icon_url": "string",
-  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
-  "name": "string",
-  "path_app_url": "string",
-  "status": {
-    "checked_at": "2019-08-24T14:15:22Z",
-    "report": {
-      "errors": [
-        "string"
-      ],
-      "warnings": [
-        "string"
-      ]
-    },
-    "status": "ok"
-  },
-  "updated_at": "2019-08-24T14:15:22Z",
-  "version": "string",
-  "wildcard_hostname": "string"
-}
-```
-
-### Responses
-
-| Status | Meaning                                                 | Description | Schema                                                       |
-|--------|---------------------------------------------------------|-------------|--------------------------------------------------------------|
-| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.WorkspaceProxy](schemas.md#codersdkworkspaceproxy) |
-
-To perform this operation, you must be authenticated. [Learn more](authentication.md).
-
-## Delete workspace proxy
-
-### Code samples
-
-```shell
-# Example request using curl
-curl -X DELETE http://coder-server:8080/api/v2/workspaceproxies/{workspaceproxy} \
-  -H 'Accept: application/json' \
-  -H 'Coder-Session-Token: API_KEY'
-```
-
-`DELETE /workspaceproxies/{workspaceproxy}`
-
-### Parameters
-
-| Name             | In   | Type         | Required | Description      |
-|------------------|------|--------------|----------|------------------|
-| `workspaceproxy` | path | string(uuid) | true     | Proxy ID or name |
-
-### Example responses
-
-> 200 Response
-
-```json
-{
-  "detail": "string",
-  "message": "string",
-  "validations": [
-    {
-      "detail": "string",
-      "field": "string"
-    }
-  ]
-}
-```
-
-### Responses
-
-| Status | Meaning                                                 | Description | Schema                                           |
-|--------|---------------------------------------------------------|-------------|--------------------------------------------------|
-| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.Response](schemas.md#codersdkresponse) |
-
-To perform this operation, you must be authenticated. [Learn more](authentication.md).
-
-## Update workspace proxy
-
-### Code samples
-
-```shell
-# Example request using curl
-curl -X PATCH http://coder-server:8080/api/v2/workspaceproxies/{workspaceproxy} \
-  -H 'Content-Type: application/json' \
-  -H 'Accept: application/json' \
-  -H 'Coder-Session-Token: API_KEY'
-```
-
-`PATCH /workspaceproxies/{workspaceproxy}`
-
-> Body parameter
-
-```json
-{
-  "display_name": "string",
-  "icon": "string",
-  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
-  "name": "string",
-  "regenerate_token": true
-}
-```
-
-### Parameters
-
-| Name             | In   | Type                                                                   | Required | Description                    |
-|------------------|------|------------------------------------------------------------------------|----------|--------------------------------|
-| `workspaceproxy` | path | string(uuid)                                                           | true     | Proxy ID or name               |
-| `body`           | body | [codersdk.PatchWorkspaceProxy](schemas.md#codersdkpatchworkspaceproxy) | true     | Update workspace proxy request |
-
-### Example responses
-
-> 200 Response
-
-```json
-{
-  "created_at": "2019-08-24T14:15:22Z",
-  "deleted": true,
-  "derp_enabled": true,
-  "derp_only": true,
-  "display_name": "string",
-  "healthy": true,
-  "icon_url": "string",
-  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
-  "name": "string",
-  "path_app_url": "string",
-  "status": {
-    "checked_at": "2019-08-24T14:15:22Z",
-    "report": {
-      "errors": [
-        "string"
-      ],
-      "warnings": [
-        "string"
-      ]
-    },
-    "status": "ok"
-  },
-  "updated_at": "2019-08-24T14:15:22Z",
-  "version": "string",
-  "wildcard_hostname": "string"
-}
-```
-
-### Responses
-
-| Status | Meaning                                                 | Description | Schema                                                       |
-|--------|---------------------------------------------------------|-------------|--------------------------------------------------------------|
-| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.WorkspaceProxy](schemas.md#codersdkworkspaceproxy) |
-
-To perform this operation, you must be authenticated. [Learn more](authentication.md).
-
-## Get workspace external agent credentials
-
-### Code samples
-
-```shell
-# Example request using curl
-curl -X GET http://coder-server:8080/api/v2/workspaces/{workspace}/external-agent/{agent}/credentials \
-  -H 'Accept: application/json' \
-  -H 'Coder-Session-Token: API_KEY'
-```
-
-`GET /workspaces/{workspace}/external-agent/{agent}/credentials`
-
-### Parameters
-
-| Name        | In   | Type         | Required | Description  |
-|-------------|------|--------------|----------|--------------|
-| `workspace` | path | string(uuid) | true     | Workspace ID |
-| `agent`     | path | string       | true     | Agent name   |
-
-### Example responses
-
-> 200 Response
-
-```json
-{
-  "agent_token": "string",
-  "command": "string"
-}
-```
-
-### Responses
-
-| Status | Meaning                                                 | Description | Schema                                                                           |
-|--------|---------------------------------------------------------|-------------|----------------------------------------------------------------------------------|
-| 200    | [OK](https://tools.ietf.org/html/rfc7231#section-6.3.1) | OK          | [codersdk.ExternalAgentCredentials](schemas.md#codersdkexternalagentcredentials) |
 
 To perform this operation, you must be authenticated. [Learn more](authentication.md).

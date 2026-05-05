@@ -14,11 +14,10 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/xerrors"
 
-	"cdr.dev/slog"
-	"github.com/coder/coder/v2/coderd/database/db2sdk"
-
+	"cdr.dev/slog/v3"
 	"github.com/coder/coder/v2/coderd/audit"
 	"github.com/coder/coder/v2/coderd/database"
+	"github.com/coder/coder/v2/coderd/database/db2sdk"
 	"github.com/coder/coder/v2/coderd/database/dbauthz"
 	"github.com/coder/coder/v2/coderd/database/dbtime"
 	"github.com/coder/coder/v2/coderd/httpapi"
@@ -45,7 +44,7 @@ import (
 // @Tags Templates
 // @Param template path string true "Template ID" format(uuid)
 // @Success 200 {object} codersdk.Template
-// @Router /templates/{template} [get]
+// @Router /api/v2/templates/{template} [get]
 func (api *API) template(rw http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	template := httpmw.TemplateParam(r)
@@ -60,7 +59,7 @@ func (api *API) template(rw http.ResponseWriter, r *http.Request) {
 // @Tags Templates
 // @Param template path string true "Template ID" format(uuid)
 // @Success 200 {object} codersdk.Response
-// @Router /templates/{template} [delete]
+// @Router /api/v2/templates/{template} [delete]
 func (api *API) deleteTemplate(rw http.ResponseWriter, r *http.Request) {
 	var (
 		apiKey            = httpmw.APIKey(r)
@@ -91,17 +90,27 @@ func (api *API) deleteTemplate(rw http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if len(workspaces) > 0 {
-		httpapi.Write(ctx, rw, http.StatusBadRequest, codersdk.Response{
-			Message: "All workspaces must be deleted before a template can be removed.",
-		})
-		return
+	// Allow deletion when only prebuild workspaces remain. Prebuilds
+	// are owned by the system user and will be cleaned up
+	// asynchronously by the prebuilds reconciler once the template's
+	// deleted flag is set.
+	for _, ws := range workspaces {
+		if ws.OwnerID != database.PrebuildsSystemUserID {
+			httpapi.Write(ctx, rw, http.StatusBadRequest, codersdk.Response{
+				Message: "All workspaces must be deleted before a template can be removed.",
+			})
+			return
+		}
 	}
 	err = api.Database.UpdateTemplateDeletedByID(ctx, database.UpdateTemplateDeletedByIDParams{
 		ID:        template.ID,
 		Deleted:   true,
 		UpdatedAt: dbtime.Now(),
 	})
+	if dbauthz.IsNotAuthorizedError(err) {
+		httpapi.Forbidden(rw)
+		return
+	}
 	if err != nil {
 		httpapi.Write(ctx, rw, http.StatusInternalServerError, codersdk.Response{
 			Message: "Internal error deleting template.",
@@ -168,7 +177,7 @@ func (api *API) notifyTemplateDeleted(ctx context.Context, template database.Tem
 // @Param request body codersdk.CreateTemplateRequest true "Request body"
 // @Param organization path string true "Organization ID"
 // @Success 200 {object} codersdk.Template
-// @Router /organizations/{organization}/templates [post]
+// @Router /api/v2/organizations/{organization}/templates [post]
 func (api *API) postTemplateByOrganization(rw http.ResponseWriter, r *http.Request) {
 	var (
 		ctx                                = r.Context()
@@ -519,7 +528,7 @@ func (api *API) postTemplateByOrganization(rw http.ResponseWriter, r *http.Reque
 // @Tags Templates
 // @Param organization path string true "Organization ID" format(uuid)
 // @Success 200 {array} codersdk.Template
-// @Router /organizations/{organization}/templates [get]
+// @Router /api/v2/organizations/{organization}/templates [get]
 func (api *API) templatesByOrganization() http.HandlerFunc {
 	// TODO: Should deprecate this endpoint and make it akin to /workspaces with
 	// 	a filter. There isn't a need to make the organization filter argument
@@ -540,7 +549,7 @@ func (api *API) templatesByOrganization() http.HandlerFunc {
 // @Produce json
 // @Tags Templates
 // @Success 200 {array} codersdk.Template
-// @Router /templates [get]
+// @Router /api/v2/templates [get]
 func (api *API) fetchTemplates(mutate func(r *http.Request, arg *database.GetTemplatesWithFilterParams)) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -604,7 +613,7 @@ func (api *API) fetchTemplates(mutate func(r *http.Request, arg *database.GetTem
 // @Param organization path string true "Organization ID" format(uuid)
 // @Param templatename path string true "Template name"
 // @Success 200 {object} codersdk.Template
-// @Router /organizations/{organization}/templates/{templatename} [get]
+// @Router /api/v2/organizations/{organization}/templates/{templatename} [get]
 func (api *API) templateByOrganizationAndName(rw http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	organization := httpmw.OrganizationParam(r)
@@ -638,7 +647,7 @@ func (api *API) templateByOrganizationAndName(rw http.ResponseWriter, r *http.Re
 // @Param template path string true "Template ID" format(uuid)
 // @Param request body codersdk.UpdateTemplateMeta true "Patch template settings request"
 // @Success 200 {object} codersdk.Template
-// @Router /templates/{template} [patch]
+// @Router /api/v2/templates/{template} [patch]
 func (api *API) patchTemplateMeta(rw http.ResponseWriter, r *http.Request) {
 	var (
 		ctx               = r.Context()
@@ -772,6 +781,10 @@ func (api *API) patchTemplateMeta(rw http.ResponseWriter, r *http.Request) {
 	if req.UseClassicParameterFlow != nil {
 		classicTemplateFlow = *req.UseClassicParameterFlow
 	}
+	disableModuleCache := template.DisableModuleCache
+	if req.DisableModuleCache != nil {
+		disableModuleCache = *req.DisableModuleCache
+	}
 
 	displayName := ptr.NilToDefault(req.DisplayName, template.DisplayName)
 	description := ptr.NilToDefault(req.Description, template.Description)
@@ -797,6 +810,7 @@ func (api *API) patchTemplateMeta(rw http.ResponseWriter, r *http.Request) {
 			req.RequireActiveVersion == template.RequireActiveVersion &&
 			(deprecationMessage == template.Deprecated) &&
 			(classicTemplateFlow == template.UseClassicParameterFlow) &&
+			(disableModuleCache == template.DisableModuleCache) &&
 			maxPortShareLevel == template.MaxPortSharingLevel &&
 			corsBehavior == template.CorsBehavior {
 			return nil
@@ -841,6 +855,7 @@ func (api *API) patchTemplateMeta(rw http.ResponseWriter, r *http.Request) {
 			MaxPortSharingLevel:          maxPortShareLevel,
 			UseClassicParameterFlow:      classicTemplateFlow,
 			CorsBehavior:                 corsBehavior,
+			DisableModuleCache:           disableModuleCache,
 		})
 		if err != nil {
 			return xerrors.Errorf("update template metadata: %w", err)
@@ -983,7 +998,7 @@ func (api *API) notifyUsersOfTemplateDeprecation(ctx context.Context, template d
 // @Tags Templates
 // @Param template path string true "Template ID" format(uuid)
 // @Success 200 {object} codersdk.DAUsResponse
-// @Router /templates/{template}/daus [get]
+// @Router /api/v2/templates/{template}/daus [get]
 func (api *API) templateDAUs(rw http.ResponseWriter, r *http.Request) {
 	template := httpmw.TemplateParam(r)
 
@@ -997,7 +1012,7 @@ func (api *API) templateDAUs(rw http.ResponseWriter, r *http.Request) {
 // @Tags Templates
 // @Param organization path string true "Organization ID" format(uuid)
 // @Success 200 {array} codersdk.TemplateExample
-// @Router /organizations/{organization}/templates/examples [get]
+// @Router /api/v2/organizations/{organization}/templates/examples [get]
 // @Deprecated Use /templates/examples instead
 func (api *API) templateExamplesByOrganization(rw http.ResponseWriter, r *http.Request) {
 	var (
@@ -1028,7 +1043,7 @@ func (api *API) templateExamplesByOrganization(rw http.ResponseWriter, r *http.R
 // @Produce json
 // @Tags Templates
 // @Success 200 {array} codersdk.TemplateExample
-// @Router /templates/examples [get]
+// @Router /api/v2/templates/examples [get]
 func (api *API) templateExamples(rw http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -1122,27 +1137,21 @@ func (api *API) convertTemplate(
 		RequireActiveVersion:    templateAccessControl.RequireActiveVersion,
 		Deprecated:              templateAccessControl.IsDeprecated(),
 		DeprecationMessage:      templateAccessControl.Deprecated,
+		Deleted:                 template.Deleted,
 		MaxPortShareLevel:       maxPortShareLevel,
 		UseClassicParameterFlow: template.UseClassicParameterFlow,
 		CORSBehavior:            codersdk.CORSBehavior(template.CorsBehavior),
+		DisableModuleCache:      template.DisableModuleCache,
 	}
 }
 
 // findTemplateAdmins fetches all users with template admin permission including owners.
 func findTemplateAdmins(ctx context.Context, store database.Store) ([]database.GetUsersRow, error) {
-	// Notice: we can't scrape the user information in parallel as pq
-	// fails with: unexpected describe rows response: 'D'
-	owners, err := store.GetUsers(ctx, database.GetUsersParams{
-		RbacRole: []string{codersdk.RoleOwner},
+	templateAdmins, err := store.GetUsers(ctx, database.GetUsersParams{
+		RbacRole: []string{codersdk.RoleTemplateAdmin, codersdk.RoleOwner},
 	})
 	if err != nil {
 		return nil, xerrors.Errorf("get owners: %w", err)
 	}
-	templateAdmins, err := store.GetUsers(ctx, database.GetUsersParams{
-		RbacRole: []string{codersdk.RoleTemplateAdmin},
-	})
-	if err != nil {
-		return nil, xerrors.Errorf("get template admins: %w", err)
-	}
-	return append(owners, templateAdmins...), nil
+	return templateAdmins, nil
 }

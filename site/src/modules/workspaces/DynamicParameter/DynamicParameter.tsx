@@ -1,49 +1,52 @@
+import {
+	CircleAlertIcon,
+	EyeIcon,
+	EyeOffIcon,
+	HourglassIcon,
+	InfoIcon,
+	LinkIcon,
+	SettingsIcon,
+	TriangleAlertIcon,
+} from "lucide-react";
+import { type FC, useId, useRef, useState } from "react";
+import * as Yup from "yup";
 import type {
 	NullHCLString,
 	PreviewParameter,
 	PreviewParameterOption,
 	WorkspaceBuildParameter,
-} from "api/typesGenerated";
-import { Badge } from "components/Badge/Badge";
-import { Button } from "components/Button/Button";
-import { Checkbox } from "components/Checkbox/Checkbox";
-import { Combobox } from "components/Combobox/Combobox";
-import { ExternalImage } from "components/ExternalImage/ExternalImage";
-import { Input } from "components/Input/Input";
-import { Label } from "components/Label/Label";
-import { MemoizedMarkdown } from "components/Markdown/Markdown";
+} from "#/api/typesGenerated";
+import { Badge } from "#/components/Badge/Badge";
+import { Button } from "#/components/Button/Button";
+import { Checkbox } from "#/components/Checkbox/Checkbox";
+import { ExternalImage } from "#/components/ExternalImage/ExternalImage";
+import { Input } from "#/components/Input/Input";
+import { Label } from "#/components/Label/Label";
+import { MemoizedMarkdown } from "#/components/Markdown/Markdown";
 import {
 	MultiSelectCombobox,
 	type Option,
-} from "components/MultiSelectCombobox/MultiSelectCombobox";
-import { RadioGroup, RadioGroupItem } from "components/RadioGroup/RadioGroup";
-import { Slider } from "components/Slider/Slider";
-import { Stack } from "components/Stack/Stack";
-import { Switch } from "components/Switch/Switch";
-import { TagInput } from "components/TagInput/TagInput";
-import { Textarea } from "components/Textarea/Textarea";
+} from "#/components/MultiSelectCombobox/MultiSelectCombobox";
+import { RadioGroup, RadioGroupItem } from "#/components/RadioGroup/RadioGroup";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "#/components/Select/Select";
+import { Slider } from "#/components/Slider/Slider";
+import { Switch } from "#/components/Switch/Switch";
+import { TagInput } from "#/components/TagInput/TagInput";
+import { Textarea } from "#/components/Textarea/Textarea";
 import {
 	Tooltip,
 	TooltipContent,
 	TooltipProvider,
 	TooltipTrigger,
-} from "components/Tooltip/Tooltip";
-import { useDebouncedValue } from "hooks/debounce";
-import { useEffectEvent } from "hooks/hookPolyfills";
-import {
-	CircleAlert,
-	Eye,
-	EyeOff,
-	Hourglass,
-	Info,
-	LinkIcon,
-	Settings,
-	TriangleAlert,
-} from "lucide-react";
-import { type FC, useEffect, useId, useRef, useState } from "react";
-import { cn } from "utils/cn";
-import type { AutofillBuildParameter } from "utils/richParameters";
-import * as Yup from "yup";
+} from "#/components/Tooltip/Tooltip";
+import { cn } from "#/utils/cn";
+import type { AutofillBuildParameter } from "#/utils/richParameters";
 
 interface DynamicParameterProps {
 	parameter: PreviewParameter;
@@ -76,25 +79,13 @@ export const DynamicParameter: FC<DynamicParameterProps> = ({
 				autofill={autofill}
 			/>
 			<div className="max-w-lg">
-				{parameter.form_type === "input" ||
-				parameter.form_type === "textarea" ||
-				parameter.form_type === "slider" ? (
-					<DebouncedParameterField
-						id={id}
-						parameter={parameter}
-						value={value}
-						onChange={onChange}
-						disabled={disabled}
-					/>
-				) : (
-					<ParameterField
-						id={id}
-						parameter={parameter}
-						value={value}
-						onChange={onChange}
-						disabled={disabled}
-					/>
-				)}
+				<ParameterField
+					id={id}
+					parameter={parameter}
+					value={value}
+					onChange={onChange}
+					disabled={disabled}
+				/>
 			</div>
 			{parameter.form_type !== "error" && (
 				<ParameterDiagnostics diagnostics={parameter.diagnostics} />
@@ -149,8 +140,8 @@ const ParameterLabel: FC<ParameterLabelProps> = ({
 							<Tooltip>
 								<TooltipTrigger asChild>
 									<span className="flex items-center">
-										<Badge size="sm" variant="warning" border="none">
-											<TriangleAlert />
+										<Badge size="sm" variant="warning">
+											<TriangleAlertIcon />
 											Immutable
 										</Badge>
 									</span>
@@ -167,8 +158,8 @@ const ParameterLabel: FC<ParameterLabelProps> = ({
 							<Tooltip>
 								<TooltipTrigger asChild>
 									<span className="flex items-center">
-										<Badge size="sm" variant="green" border="none">
-											<Hourglass />
+										<Badge size="sm" variant="green">
+											<HourglassIcon />
 											Ephemeral
 										</Badge>
 									</span>
@@ -186,7 +177,7 @@ const ParameterLabel: FC<ParameterLabelProps> = ({
 								<TooltipTrigger asChild>
 									<span className="flex items-center">
 										<Badge size="sm">
-											<Settings />
+											<SettingsIcon />
 											Preset
 										</Badge>
 									</span>
@@ -219,7 +210,7 @@ const ParameterLabel: FC<ParameterLabelProps> = ({
 							<Tooltip>
 								<TooltipTrigger asChild>
 									<span className="flex items-center">
-										<Badge size="sm" variant="destructive" border="none">
+										<Badge size="sm" variant="destructive">
 											Required
 										</Badge>
 									</span>
@@ -244,196 +235,6 @@ const ParameterLabel: FC<ParameterLabelProps> = ({
 	);
 };
 
-interface DebouncedParameterFieldProps {
-	parameter: PreviewParameter;
-	value?: string;
-	onChange: (value: string) => void;
-	disabled?: boolean;
-	id: string;
-}
-
-const DebouncedParameterField: FC<DebouncedParameterFieldProps> = ({
-	parameter,
-	value,
-	onChange,
-	disabled,
-	id,
-}) => {
-	const [localValue, setLocalValue] = useState(
-		value !== undefined ? value : validValue(parameter.value),
-	);
-	const [showMaskedInput, setShowMaskedInput] = useState(false);
-	const debouncedLocalValue = useDebouncedValue(localValue, 500);
-	const onChangeEvent = useEffectEvent(onChange);
-	// prevDebouncedValueRef is to prevent calling the onChangeEvent on the initial render
-	const prevDebouncedValueRef = useRef<string | undefined>(undefined);
-	const prevValueRef = useRef(value);
-
-	// Necessary for dynamic defaults or fields being set by preset parameters
-	useEffect(() => {
-		if (value !== undefined && value !== prevValueRef.current) {
-			setLocalValue(value);
-			prevValueRef.current = value;
-		}
-	}, [value]);
-
-	useEffect(() => {
-		// Only call onChangeEvent if debouncedLocalValue is different from the previously committed value
-		// and it's not the initial undefined state.
-		if (
-			prevDebouncedValueRef.current !== undefined &&
-			prevDebouncedValueRef.current !== debouncedLocalValue
-		) {
-			onChangeEvent(debouncedLocalValue);
-		}
-
-		// Update the ref to the current debounced value for the next comparison
-		prevDebouncedValueRef.current = debouncedLocalValue;
-	}, [debouncedLocalValue, onChangeEvent]);
-
-	const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-	const resizeTextarea = useEffectEvent(() => {
-		if (textareaRef.current) {
-			const textarea = textareaRef.current;
-			textarea.style.height = `${textarea.scrollHeight}px`;
-		}
-	});
-
-	useEffect(() => {
-		resizeTextarea();
-	}, [resizeTextarea]);
-
-	switch (parameter.form_type) {
-		case "textarea": {
-			return (
-				<Stack direction="row" spacing={0} alignItems="center">
-					<Textarea
-						ref={textareaRef}
-						id={id}
-						className={cn(
-							"overflow-y-auto max-h-[500px]",
-							parameter.styling?.mask_input &&
-								!showMaskedInput &&
-								"[-webkit-text-security:disc]",
-						)}
-						value={localValue}
-						onChange={(e) => {
-							const target = e.currentTarget;
-							target.style.height = "auto";
-							target.style.height = `${target.scrollHeight}px`;
-
-							setLocalValue(e.target.value);
-						}}
-						disabled={disabled}
-						placeholder={parameter.styling?.placeholder}
-						required={parameter.required}
-					/>
-					{parameter.styling?.mask_input && (
-						<Button
-							type="button"
-							variant="subtle"
-							size="icon"
-							onMouseDown={() => setShowMaskedInput(true)}
-							onMouseOut={() => setShowMaskedInput(false)}
-							onMouseUp={() => setShowMaskedInput(false)}
-							disabled={disabled}
-						>
-							{showMaskedInput ? (
-								<EyeOff className="h-4 w-4" />
-							) : (
-								<Eye className="h-4 w-4" />
-							)}
-						</Button>
-					)}
-				</Stack>
-			);
-		}
-
-		case "input": {
-			const inputType =
-				parameter.type === "number"
-					? "number"
-					: parameter.styling?.mask_input && !showMaskedInput
-						? "password"
-						: "text";
-			const inputProps: Record<string, unknown> = {};
-
-			if (parameter.type === "number") {
-				const validations = parameter.validations[0] || {};
-				const { validation_min, validation_max } = validations;
-
-				if (validation_min !== null) {
-					inputProps.min = validation_min;
-				}
-
-				if (validation_max !== null) {
-					inputProps.max = validation_max;
-				}
-			}
-
-			return (
-				<Stack direction="row" spacing={0} alignItems="center">
-					<Input
-						id={id}
-						type={inputType}
-						value={localValue}
-						onChange={(e) => {
-							setLocalValue(e.target.value);
-						}}
-						disabled={disabled}
-						required={parameter.required}
-						placeholder={parameter.styling?.placeholder}
-						{...inputProps}
-					/>
-					{parameter.styling?.mask_input && parameter.type !== "number" && (
-						<Button
-							type="button"
-							variant="subtle"
-							size="icon"
-							onMouseDown={() => setShowMaskedInput(true)}
-							onMouseOut={() => setShowMaskedInput(false)}
-							onMouseUp={() => setShowMaskedInput(false)}
-							disabled={disabled}
-						>
-							{showMaskedInput ? (
-								<EyeOff className="h-4 w-4" />
-							) : (
-								<Eye className="h-4 w-4" />
-							)}
-						</Button>
-					)}
-				</Stack>
-			);
-		}
-
-		case "slider": {
-			const numericValue = Number.isFinite(Number(localValue))
-				? Number(localValue)
-				: 0;
-			const { validation_min: min = 0, validation_max: max = 100 } =
-				parameter.validations[0] ?? {};
-
-			return (
-				<div className="flex flex-row items-baseline gap-3">
-					<Slider
-						id={id}
-						className="mt-2"
-						value={[numericValue]}
-						onValueChange={([value]) => {
-							setLocalValue(value.toString());
-						}}
-						min={min ?? undefined}
-						max={max ?? undefined}
-						disabled={disabled}
-					/>
-					<span className="w-4 font-medium">{numericValue}</span>
-				</div>
-			);
-		}
-	}
-};
-
 interface ParameterFieldProps {
 	parameter: PreviewParameter;
 	value?: string;
@@ -449,20 +250,108 @@ const ParameterField: FC<ParameterFieldProps> = ({
 	disabled,
 	id,
 }) => {
+	if (value === undefined && parameter.value.valid) {
+		value = parameter.value.value;
+	}
+
 	switch (parameter.form_type) {
+		case "textarea": {
+			const maskInput = parameter.styling?.mask_input ?? false;
+
+			return (
+				<MaskableTextArea
+					id={id}
+					onChange={onChange}
+					value={value}
+					masked={maskInput}
+					disabled={disabled}
+					required={parameter.required}
+					placeholder={parameter.styling?.placeholder}
+				/>
+			);
+		}
+
+		case "input": {
+			let maskInput = parameter.styling?.mask_input ?? false;
+			const inputProps: Partial<MaskableInputProps> = {
+				type: "text",
+			};
+
+			if (parameter.type === "number") {
+				// Only text can be effectively masked
+				maskInput = false;
+
+				inputProps.type = "number";
+
+				const { validation_min, validation_max } =
+					parameter.validations[0] ?? {};
+				if (validation_min !== null) {
+					inputProps.min = validation_min;
+				}
+				if (validation_max !== null) {
+					inputProps.max = validation_max;
+				}
+			} else if (parameter.styling?.mask_input) {
+				inputProps.type = "password";
+			}
+
+			return (
+				<MaskableInput
+					id={id}
+					onChange={onChange}
+					value={value}
+					masked={maskInput}
+					disabled={disabled}
+					required={parameter.required}
+					placeholder={parameter.styling?.placeholder}
+					{...inputProps}
+				/>
+			);
+		}
+
+		case "slider": {
+			const numericValue = Number.isFinite(Number(value)) ? Number(value) : 0;
+			const { validation_min: min = 0, validation_max: max = 100 } =
+				parameter.validations[0] ?? {};
+
+			return (
+				<div className="flex flex-row items-baseline gap-3">
+					<Slider
+						id={id}
+						className="mt-2"
+						value={[numericValue]}
+						onValueChange={([value]) => {
+							onChange(value.toString());
+						}}
+						min={min ?? undefined}
+						max={max ?? undefined}
+						disabled={disabled}
+					/>
+					<span className="w-4 font-medium">{numericValue}</span>
+				</div>
+			);
+		}
+
 		case "dropdown": {
 			return (
-				<Combobox
-					id={id}
-					value={value ?? ""}
-					onSelect={(value) => onChange(value)}
-					options={parameter.options.map((option) => ({
-						icon: option.icon,
-						displayName: option.name,
-						value: option.value.value,
-						description: option.description,
-					}))}
-				/>
+				<Select
+					value={value}
+					onValueChange={(newValue) => onChange(newValue ?? "")}
+					disabled={disabled}
+				>
+					<SelectTrigger>
+						<SelectValue
+							placeholder={parameter.styling?.placeholder || "Select option"}
+						/>
+					</SelectTrigger>
+					<SelectContent>
+						{parameter.options.map((option) => (
+							<SelectItem key={option.value.value} value={option.value.value}>
+								{option.name}
+							</SelectItem>
+						))}
+					</SelectContent>
+				</Select>
 			);
 		}
 
@@ -596,6 +485,113 @@ const ParameterField: FC<ParameterFieldProps> = ({
 	}
 };
 
+type MaskableInputProps = Omit<React.ComponentProps<"input">, "onChange"> & {
+	onChange: (value: string) => void;
+	masked?: boolean;
+};
+
+const MaskableInput: FC<MaskableInputProps> = ({
+	id,
+	onChange,
+	value,
+	masked,
+	disabled,
+	required,
+	placeholder,
+	type,
+	...inputProps
+}) => {
+	const [showMaskedInput, setShowMaskedInput] = useState(false);
+
+	return (
+		<div className="flex flex-row items-center">
+			<Input
+				id={id}
+				type={masked && showMaskedInput ? "text" : type}
+				value={value}
+				onChange={(e) => {
+					onChange(e.target.value);
+				}}
+				disabled={disabled}
+				required={required}
+				placeholder={placeholder}
+				{...inputProps}
+			/>
+			{masked && (
+				<Button
+					type="button"
+					variant="subtle"
+					size="icon"
+					aria-label={showMaskedInput ? "Hide value" : "Show value"}
+					aria-pressed={showMaskedInput}
+					onClick={() => setShowMaskedInput((value) => !value)}
+					disabled={disabled}
+				>
+					{showMaskedInput ? (
+						<EyeOffIcon className="h-4 w-4" />
+					) : (
+						<EyeIcon className="h-4 w-4" />
+					)}
+				</Button>
+			)}
+		</div>
+	);
+};
+
+const MaskableTextArea: FC<MaskableInputProps> = ({
+	id,
+	onChange,
+	value,
+	masked,
+	disabled,
+	placeholder,
+	required,
+}) => {
+	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	const [showMaskedInput, setShowMaskedInput] = useState(false);
+
+	return (
+		<div className="flex flex-row items-center">
+			<Textarea
+				ref={textareaRef}
+				id={id}
+				className={cn(
+					"overflow-y-auto max-h-[500px]",
+					masked && !showMaskedInput && "[-webkit-text-security:disc]",
+				)}
+				value={value}
+				onChange={(event) => {
+					const target = event.currentTarget;
+					target.style.height = "auto";
+					target.style.height = `${target.scrollHeight}px`;
+
+					onChange(event.target.value);
+				}}
+				disabled={disabled}
+				required={required}
+				placeholder={placeholder}
+			/>
+			{masked && (
+				<Button
+					type="button"
+					variant="subtle"
+					size="icon"
+					aria-label={showMaskedInput ? "Hide value" : "Show value"}
+					aria-pressed={showMaskedInput}
+					onClick={() => setShowMaskedInput((value) => !value)}
+					disabled={disabled}
+				>
+					{showMaskedInput ? (
+						<EyeOffIcon className="h-4 w-4" />
+					) : (
+						<EyeIcon className="h-4 w-4" />
+					)}
+				</Button>
+			)}
+		</div>
+	);
+};
+
 type ParsedValues = {
 	values: string[];
 	error: string;
@@ -640,7 +636,7 @@ const OptionDisplay: FC<OptionDisplayProps> = ({ option }) => {
 				<TooltipProvider delayDuration={100}>
 					<Tooltip>
 						<TooltipTrigger asChild>
-							<Info className="w-3.5 h-3.5 text-content-secondary" />
+							<InfoIcon className="w-3.5 h-3.5 text-content-secondary" />
 						</TooltipTrigger>
 						<TooltipContent side="right" sideOffset={10}>
 							{option.description}
@@ -862,7 +858,7 @@ export const useValidationSchemaForDynamicParameters = (
 										(v) =>
 											v.validation_regex !== null && v.validation_regex !== "",
 									);
-									if (!regex || !regex.validation_regex) {
+									if (!regex?.validation_regex) {
 										return true;
 									}
 
@@ -937,13 +933,13 @@ export const Diagnostics: FC<DiagnosticsProps> = ({ diagnostics }) => {
 				>
 					<div className="flex flex-row items-start">
 						{diagnostic.severity === "error" && (
-							<CircleAlert
+							<CircleAlertIcon
 								className="me-2 inline-flex shrink-0 text-content-destructive size-icon-sm"
 								aria-hidden="true"
 							/>
 						)}
 						{diagnostic.severity === "warning" && (
-							<TriangleAlert
+							<TriangleAlertIcon
 								className="me-2 inline-flex shrink-0 text-content-warning size-icon-sm"
 								aria-hidden="true"
 							/>

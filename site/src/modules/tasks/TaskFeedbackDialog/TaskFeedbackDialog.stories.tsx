@@ -1,8 +1,8 @@
-import { MockTask, mockApiError } from "testHelpers/entities";
-import { withGlobalSnackbar } from "testHelpers/storybook";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { API } from "api/api";
 import { expect, spyOn, userEvent, within } from "storybook/test";
+import { API } from "#/api/api";
+import { MockTask, mockApiError } from "#/testHelpers/entities";
+import { withToaster } from "#/testHelpers/storybook";
 import { TaskFeedbackDialog } from "./TaskFeedbackDialog";
 
 const meta: Meta<typeof TaskFeedbackDialog> = {
@@ -21,7 +21,7 @@ export const Idle: Story = {};
 
 export const Submitting: Story = {
 	beforeEach: async () => {
-		spyOn(API.experimental, "createTaskFeedback").mockImplementation(() => {
+		spyOn(API, "createTaskFeedback").mockImplementation(() => {
 			return new Promise(() => {});
 		});
 	},
@@ -51,9 +51,9 @@ export const Success: Story = {
 	args: {
 		open: true,
 	},
-	decorators: [withGlobalSnackbar],
+	decorators: [withToaster],
 	beforeEach: async () => {
-		spyOn(API.experimental, "createTaskFeedback").mockResolvedValue();
+		spyOn(API, "createTaskFeedback").mockResolvedValue();
 	},
 	play: async ({ canvasElement, step }) => {
 		const body = within(canvasElement.ownerDocument.body);
@@ -76,21 +76,18 @@ export const Success: Story = {
 		});
 
 		step("submitted successfully", async () => {
-			await body.findByText("Feedback submitted successfully");
-			expect(API.experimental.createTaskFeedback).toHaveBeenCalledWith(
-				MockTask.id,
-				{
-					rate: "regular",
-					comment: "This is my comment",
-				},
-			);
+			await body.findByText("Feedback submitted successfully.");
+			expect(API.createTaskFeedback).toHaveBeenCalledWith(MockTask.id, {
+				rate: "regular",
+				comment: "This is my comment",
+			});
 		});
 	},
 };
 
 export const Failure: Story = {
 	beforeEach: async () => {
-		spyOn(API.experimental, "createTaskFeedback").mockRejectedValue(
+		spyOn(API, "createTaskFeedback").mockRejectedValue(
 			mockApiError({
 				message: "Failed to submit feedback",
 				detail: "Server is down",

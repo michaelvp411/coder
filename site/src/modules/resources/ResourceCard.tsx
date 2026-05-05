@@ -1,12 +1,15 @@
 import type { Interpolation, Theme } from "@emotion/react";
-import IconButton from "@mui/material/IconButton";
-import Tooltip from "@mui/material/Tooltip";
-import type { WorkspaceAgent, WorkspaceResource } from "api/typesGenerated";
-import { CopyableValue } from "components/CopyableValue/CopyableValue";
-import { DropdownArrow } from "components/DropdownArrow/DropdownArrow";
-import { MemoizedInlineMarkdown } from "components/Markdown/Markdown";
-import { Stack } from "components/Stack/Stack";
 import { Children, type FC, type JSX, useState } from "react";
+import type { WorkspaceAgent, WorkspaceResource } from "#/api/typesGenerated";
+import { ChevronDownIcon } from "#/components/AnimatedIcons/ChevronDown";
+import { Button } from "#/components/Button/Button";
+import { CopyableValue } from "#/components/CopyableValue/CopyableValue";
+import { MemoizedInlineMarkdown } from "#/components/Markdown/InlineMarkdown";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipTrigger,
+} from "#/components/Tooltip/Tooltip";
 import { ResourceAvatar } from "./ResourceAvatar";
 import { SensitiveValue } from "./SensitiveValue";
 
@@ -93,13 +96,11 @@ export const ResourceCard: FC<ResourceCardProps> = ({ resource, agentRow }) => {
 
 	return (
 		<div key={resource.id} css={styles.resourceCard} className="resource-card">
-			<Stack
-				direction="row"
-				alignItems="flex-start"
+			<div
+				className="flex flex-row items-start gap-20"
 				css={styles.resourceCardHeader}
-				spacing={10}
 			>
-				<Stack direction="row" spacing={1} css={styles.resourceCardProfile}>
+				<div className="flex flex-row gap-2" css={styles.resourceCardProfile}>
 					<div>
 						<ResourceAvatar resource={resource} />
 					</div>
@@ -107,15 +108,12 @@ export const ResourceCard: FC<ResourceCardProps> = ({ resource, agentRow }) => {
 						<div css={styles.metadataLabel}>{resource.type}</div>
 						<div css={styles.metadataValue}>{resource.name}</div>
 					</div>
-				</Stack>
+				</div>
 
 				<div
-					css={{
-						flexGrow: 2,
-						display: "grid",
+					className="grow-[2] grid gap-x-10 gap-y-6"
+					style={{
 						gridTemplateColumns: `repeat(${gridWidth}, minmax(0, 1fr))`,
-						gap: 40,
-						rowGap: 24,
 					}}
 				>
 					{resource.daily_cost > 0 && (
@@ -162,22 +160,24 @@ export const ResourceCard: FC<ResourceCardProps> = ({ resource, agentRow }) => {
 					})}
 				</div>
 				{mLength > 4 && (
-					<Tooltip
-						title={
-							shouldDisplayAllMetadata ? "Hide metadata" : "Show all metadata"
-						}
-					>
-						<IconButton
-							onClick={() => {
-								setShouldDisplayAllMetadata((value) => !value);
-							}}
-							size="large"
-						>
-							<DropdownArrow margin={false} close={shouldDisplayAllMetadata} />
-						</IconButton>
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								onClick={() => {
+									setShouldDisplayAllMetadata((value) => !value);
+								}}
+								size="icon-lg"
+								variant="subtle"
+							>
+								<ChevronDownIcon open={shouldDisplayAllMetadata} />
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent side="bottom">
+							{shouldDisplayAllMetadata ? "Hide metadata" : "Show all metadata"}
+						</TooltipContent>
 					</Tooltip>
 				)}
-			</Stack>
+			</div>
 
 			{resource.agents && resource.agents.length > 0 && (
 				<div>{resource.agents.map(agentRow)}</div>
