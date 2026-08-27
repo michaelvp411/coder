@@ -18,7 +18,7 @@ import {
 	useState,
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "react-query";
-import { Link, useNavigate } from "react-router";
+import { Link } from "react-router";
 import { API } from "#/api/api";
 import { templateVersion } from "#/api/queries/templates";
 import {
@@ -64,7 +64,6 @@ import {
 	TooltipTrigger,
 } from "#/components/Tooltip/Tooltip";
 import { useAuthenticated } from "#/hooks/useAuthenticated";
-import { useClickableTableRow } from "#/hooks/useClickableTableRow";
 import {
 	getTerminalHref,
 	getVSCodeHref,
@@ -213,90 +212,106 @@ export const WorkspacesTable: FC<WorkspacesTableProps> = ({
 										}}
 										aria-label={`Select workspace ${workspace.name}`}
 									/>
-									<AvatarData
-										title={
-											<div className="flex items-center gap-1">
-												<span className="whitespace-nowrap">
-													{workspace.name}
-												</span>
-												{workspace.favorite && (
-													<StarIcon className="size-icon-xs" />
-												)}
-												{workspace.outdated && (
-													<WorkspaceOutdatedTooltip workspace={workspace} />
-												)}
-												{aiTasksEnabled && workspace.task_id && (
-													<Badge size="xs" variant="default">
-														Task
-													</Badge>
-												)}
-												{chatsByWorkspace?.[workspace.id] && (
-													<Badge size="xs" variant="info" hover asChild>
-														<Link
-															to={`/agents/${chatsByWorkspace[workspace.id]}`}
-															onClick={(e) => e.stopPropagation()}
-															aria-label={`View agent conversation for ${workspace.name}`}
-														>
-															Agent
-														</Link>
-													</Badge>
-												)}
-											</div>
-										}
-										subtitle={
-											<div className="flex items-center gap-1">
-												<span className="sr-only">Owner: </span>
-												<div className="flex gap-2">
-													{workspace.owner_name}
-													{workspace.shared_with &&
-														workspace.shared_with.length > 0 && (
-															<WorkspaceSharingIndicator
-																sharedWith={workspace.shared_with}
-																settingsPath={`/@${workspace.owner_name}/${workspace.name}/settings/sharing`}
-															/>
+									<Link
+										to={`/@${workspace.owner_name}/${workspace.name}`}
+											className="flex-1"
+											aria-label={`View workspace ${workspace.name}`}
+										>
+											<AvatarData
+												title={
+													<div className="flex items-center gap-1">
+														<span className="whitespace-nowrap">
+															{workspace.name}
+													</span>
+														{workspace.favorite && (
+															<StarIcon className="size-icon-xs" />
+													)}
+														{workspace.outdated && (
+															<WorkspaceOutdatedTooltip workspace={workspace} />
+														)}
+														{aiTasksEnabled && workspace.task_id && (
+															<Badge size="xs" variant="default">
+																Task
+															</Badge>
+														)}
+														{chatsByWorkspace?.[workspace.id] && (
+														<Badge size="xs" variant="info" hover asChild>
+															<Link
+																	to={`/agents/${chatsByWorkspace[workspace.id]}`}
+																	onClick={(e) => e.stopPropagation()}
+																	aria-label={`View agent conversation for ${workspace.name}`}
+																>
+																	Agent
+																</Link>
+															</Badge>
 														)}
 												</div>
-											</div>
+												}
+												subtitle={
+													<div className="flex items-center gap-1">
+														<span className="sr-only">Owner: </span>
+														<div className="flex gap-2">
+															{workspace.owner_name}
+															{workspace.shared_with &&
+																workspace.shared_with.length > 0 && (
+																	<WorkspaceSharingIndicator
+																		sharedWith={workspace.shared_with}
+																		settingsPath={`/@${workspace.owner_name}/${workspace.name}/settings/sharing`}
+																	/>
+																)}
+														</div>
+												</div>
+												}
+											avatar={
+													<Avatar
+														src={workspace.owner_avatar_url}
+														fallback={workspace.owner_name}
+														size="lg"
+													/>
+												}
+											/>
+									</Link>
+									</div>
+								</TableCell>
+
+								<TableCell>
+									<Link
+										to={`/@${workspace.owner_name}/${workspace.name}`}
+										className="block"
+									>
+										<AvatarData
+											title={
+												<span className="whitespace-nowrap block max-w-52 text-ellipsis overflow-hidden">
+													{getDisplayWorkspaceTemplateName(workspace)}
+												</span>
 										}
-										avatar={
-											<Avatar
-												src={workspace.owner_avatar_url}
-												fallback={workspace.owner_name}
+											subtitle={
+											dashboard.showOrganizations && (
+													<>
+														<span className="sr-only">Organization:</span>{" "}
+														{activeOrg?.display_name || workspace.organization_name}
+													</>
+												)
+											}
+											avatar={
+												<Avatar
+													variant="icon"
+												src={workspace.template_icon}
+												fallback={getDisplayWorkspaceTemplateName(workspace)}
 												size="lg"
 											/>
 										}
 									/>
-								</div>
+								</Link>
 							</TableCell>
 
 							<TableCell>
-								<AvatarData
-									title={
-										<span className="whitespace-nowrap block max-w-52 text-ellipsis overflow-hidden">
-											{getDisplayWorkspaceTemplateName(workspace)}
-										</span>
-									}
-									subtitle={
-										dashboard.showOrganizations && (
-											<>
-												<span className="sr-only">Organization:</span>{" "}
-												{activeOrg?.display_name || workspace.organization_name}
-											</>
-										)
-									}
-									avatar={
-										<Avatar
-											variant="icon"
-											src={workspace.template_icon}
-											fallback={getDisplayWorkspaceTemplateName(workspace)}
-											size="lg"
-										/>
-									}
-								/>
-							</TableCell>
-
-							<TableCell>
-								<WorkspaceStatus workspace={workspace} />
+								<Link
+									to={`/@${workspace.owner_name}/${workspace.name}`}
+									className="block"
+								>
+									<WorkspaceStatus workspace={workspace} />
+								</Link>
 							</TableCell>
 
 							<WorkspaceActionsCell
@@ -323,34 +338,14 @@ const WorkspacesRow: FC<WorkspacesRowProps> = ({
 	children,
 	checked,
 }) => {
-	const navigate = useNavigate();
-
 	const workspacePageLink = `/@${workspace.owner_name}/${workspace.name}`;
-	const openLinkInNewTab = () => window.open(workspacePageLink, "_blank");
-	const { role, hover, ...clickableProps } = useClickableTableRow({
-		onMiddleClick: openLinkInNewTab,
-		onClick: (event) => {
-			// Order of booleans actually matters here for Windows-Mac compatibility;
-			// meta key is Cmd on Macs, but on Windows, it's either the Windows key,
-			// or the key does nothing at all (depends on the browser)
-			const shouldOpenInNewTab =
-				event.shiftKey || event.metaKey || event.ctrlKey;
-
-			if (shouldOpenInNewTab) {
-				openLinkInNewTab();
-			} else {
-				navigate(workspacePageLink);
-			}
-		},
-	});
-
+	
 	return (
-		<TableRow
-			{...clickableProps}
-			data-testid={`workspace-${workspace.id}`}
-			className={cn([
-				checked ? "bg-surface-secondary hover:bg-surface-secondary" : undefined,
-				clickableProps.className,
+			<TableRow
+				data-testid={`workspace-${workspace.id}`}
+				hover
+				className={cn([
+					checked ? "bg-surface-secondary hover:bg-surface-secondary" : undefined,
 			])}
 		>
 			{children}
